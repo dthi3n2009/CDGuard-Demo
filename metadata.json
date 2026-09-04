@@ -1,0 +1,6 @@
+{
+  "name": "CDGuard - Giám Sát Vườn Sầu Riêng",
+  "description": "Hệ thống giám sát nguy cơ Cadmium (CRS) cho vườn sầu riêng Đồng bằng sông Cửu Long",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

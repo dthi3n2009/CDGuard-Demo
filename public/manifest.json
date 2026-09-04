@@ -1,0 +1,16 @@
+{
+  "short_name": "CDGuard",
+  "name": "CDGuard - Giám Sát Vườn Sầu Riêng",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/628/628283.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#1A3D2B",
+  "theme_color": "#1A3D2B",
+  "display": "standalone",
+  "orientation": "portrait"
+}
