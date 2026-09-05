@@ -86,4 +86,7 @@ Dự án được xác định yêu cầu và kiểm tra bởi chủ dự án; c
 
 ## Nhóm dự thi
 
-Hai tác giả là học sinh lớp 12T3 và lớp 11T3, Trường THPT FPT Cần Thơ; tham gia vòng sản phẩm **Solve for Tomorrow** với dự án CDGuard.
+- Nguyễn Phúc Duy Thiên — học sinh lớp 12T3.
+- Dương Hoàng Thiên Đăng — học sinh lớp 11T2.
+
+Hai tác giả là học sinh Trường THPT FPT Cần Thơ, tham gia vòng sản phẩm **Solve for Tomorrow** với dự án CDGuard.
