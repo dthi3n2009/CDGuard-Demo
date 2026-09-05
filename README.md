@@ -1,138 +1,80 @@
-# CDGuard Pro – Hệ Thống Giám Sát Nguy Cơ Cadmium Vườn Sầu Riêng ĐBSCL
+# CDGuard – Giám sát đất vườn sầu riêng
 
-CDGuard Pro là ứng dụng web PWA full-stack thông minh dành cho nông dân trồng sầu riêng tại Đồng bằng sông Cửu Long. Ứng dụng giúp theo dõi các chỉ số đất (pH, EC, độ ẩm, nhiệt độ) qua cảm biến IoT RS485 và tự động tính toán **Chỉ số nguy cơ Cadmium (CRS)** để đưa ra khuyến nghị cải tạo đất kịp thời.
+CDGuard là ứng dụng Android hỗ trợ theo dõi pH, EC, độ ẩm và nhiệt độ đất cho vườn sầu riêng. Ứng dụng giúp lưu số đo theo từng cây, tổng hợp theo toàn vườn và hiển thị chỉ số nguy cơ Cadmium (CRS) để người dùng theo dõi điều kiện đất.
 
-> ⚠️ **Tuyên bố quan trọng:** CDGuard Pro chỉ đánh giá nguy cơ dựa trên điều kiện môi trường đất (pH, EC, độ ẩm, nhiệt độ), không thay thế kết quả xét nghiệm định lượng Cadmium tại phòng thí nghiệm chuyên sâu.
+> Lưu ý: CRS chỉ là chỉ số đánh giá nguy cơ từ điều kiện đất. Ứng dụng không thay thế kết quả xét nghiệm Cadmium tại phòng thí nghiệm.
 
----
+## Tính năng hiện có
 
-## 1. Hướng Dẫn Chạy Ứng Dụng (Development & Production)
+- APK Android cài trực tiếp trên điện thoại.
+- Quản lý nhiều vườn, thêm/xóa cây và sơ đồ cây theo hàng.
+- Cây mới luôn ở trạng thái **chưa có số đo**; app không tự gán pH, CRS hoặc cảnh báo.
+- Lưu và xem lịch sử pH, EC, độ ẩm, nhiệt độ theo cây và theo vườn.
+- Vườn mẫu Phi Yến tại Phong Điền, Cần Thơ: 15 cây, dữ liệu ngày 05/09 với nhãn Trước mưa/Sau mưa.
+- Hỗ trợ dữ liệu trạm Firebase; một bản ghi realtime chỉ được nhận khi được gắn đúng tên cây trong vườn.
+- Trợ lý CDGuard có 100 bộ hỏi–đáp cơ bản, hoạt động khi không có mạng/API.
+- Nhận diện CaGuard trên màn mở đầu, thanh ứng dụng và biểu tượng APK.
 
-### Yêu cầu môi trường
-- Node.js version 18+ hoặc 20+
-- npm hoặc yarn
+## Cài APK
 
-### Các bước khởi chạy cục bộ
-1. Cài đặt các thư viện phụ thuộc:
-   ```bash
-   npm install
-   ```
+Sau khi build, file nằm tại:
 
-2. Chạy ứng dụng trong môi trường phát triển (Dev Server):
-   ```bash
-   npm run dev
-   ```
-   Ứng dụng sẽ chạy tại địa chỉ `http://localhost:3000`.
+`android/app/build/outputs/apk/debug/app-debug.apk`
 
-3. Biên dịch cho Production:
-   ```bash
-   npm run build
-   ```
+Trên điện thoại Android, tải file APK, cho phép cài đặt từ nguồn này khi hệ thống hỏi, sau đó cài đè phiên bản cũ.
 
-4. Chạy server Production (Express + esbuild CommonJS bundle):
-   ```bash
-   npm run start
-   ```
+## Chạy và build từ mã nguồn
 
----
-
-## 2. Cách Cấu Hình Firebase Realtime Database & Auth
-
-Ứng dụng mặc định kết nối với Firebase Realtime Database của dự án:
-- **Project ID:** `cdguard-7700a`
-- **Database URL:** `https://cdguard-7700a-default-rtdb.asia-southeast1.firebasedatabase.app`
-- **Nhánh dữ liệu:** `/data`
-
-Nếu muốn kết nối với dự án Firebase riêng của bạn, tạo hoặc cập nhật file `.env`:
-
-```env
-VITE_FIREBASE_API_KEY="AIzaSyYourApiKeyHere"
-VITE_FIREBASE_AUTH_DOMAIN="your-project.firebaseapp.com"
-VITE_FIREBASE_DATABASE_URL="https://your-project-default-rtdb.firebaseio.com"
-VITE_FIREBASE_PROJECT_ID="your-project"
-VITE_FIREBASE_STORAGE_BUCKET="your-project.appspot.com"
-VITE_FIREBASE_MESSAGING_SENDER_ID="123456789"
-VITE_FIREBASE_APP_ID="1:123456789:web:abc123def456"
-```
-
----
-
-## 3. Cách Cấu Hình Google Login (Firebase Authentication)
-
-1. Mở [Firebase Console](https://console.firebase.google.com/) -> Chọn dự án của bạn.
-2. Mới mục **Authentication** -> **Sign-in method** -> Bật phương thức **Google**.
-3. Điền thông tin Email hỗ trợ và lưu.
-4. Mới mục **Authorized domains** -> Thêm tên miền ứng dụng (ví dụ: `localhost` hoặc tên miền Cloud Run preview).
-5. Khi người dùng bấm nút **"Đăng nhập với Google"**, ứng dụng sẽ gọi `signInWithPopup`. Nếu chưa có API Key, ứng dụng sẽ hiện thông báo thân thiện và tự động cho phép dùng tiếp chế độ Demo.
-
----
-
-## 4. Cách Cấu Hình Gemini AI Assistant
-
-Trợ lý AI được xây dựng qua endpoint bảo mật server-side `/api/chat` sử dụng SDK `@google/genai` mới nhất với model `gemini-3.6-flash`.
-
-Cấu hình khóa bí mật trong file `.env` hoặc Bảng điều khiển Secrets của AI Studio:
-
-```env
-GEMINI_API_KEY="AIzaSyYourGeminiKey"
-```
-
-- **Mạch hoạt động:** Khóa API chỉ nằm ở phía Backend Express, tuyệt đối không lộ ra trình duyệt Client.
-- **Dự phòng (Fallback):** Nếu chưa điền `GEMINI_API_KEY`, hệ thống tự động chuyển sang bộ quy tắc AI nội bộ thông minh để trả lời các câu hỏi nông nghiệp sầu riêng mà không gây gián đoạn trải nghiệm.
-
----
-
-## 5. Cách Chuyển Từ Demo Sang Dữ Liệu Thực Tế
-
-1. **Trên thiết bị cứng (Hardware):**
-   - Cảm biến đất RS485 4-in-1 (đo pH, EC µS/cm, độ ẩm %, nhiệt độ °C).
-   - Vi điều khiển ESP32 đọc cảm biến qua chuẩn Modbus RS485.
-   - Module SIM 4G A7680C gửi bản ghi JSON lên Firebase Realtime Database tại nhánh `/data`.
-   - Quy đổi EC: Cảm biến gửi đơn vị µS/cm (ví dụ `2150`), phần mềm tự động quy đổi sang dS/m (`2150 / 1000 = 2.15 dS/m`).
-
-2. **Cấu trúc bản ghi JSON gửi lên Firebase:**
-   ```json
-   {
-     "device_id": "esp32-01",
-     "ts": 1786200000000,
-     "values": {
-       "ph": 5.4,
-       "ec": 2150,
-       "moisture": 78.5,
-       "temp": 29.6
-     }
-   }
-   ```
-
-3. **Giao diện CDGuard Pro:**
-   - Vào bước 3 của **Onboarding** hoặc tab **Thiết bị**.
-   - Nhập Mã trạm (Device ID) là `esp32-01`.
-   - Bấm **"Kiểm tra kết nối"** hoặc **"Đồng bộ ngay"**. Hệ thống sẽ tự động chuyển từ dữ liệu demo sang dữ liệu thực tế từ trạm cảm biến.
-
----
-
-## 6. Hướng Dẫn Deploy (Triển Khai)
-
-Ứng dụng sẵn sàng deploy lên Google Cloud Run, Vercel, Render hoặc Docker container:
+Yêu cầu Node.js 18+ và Android SDK/JDK tương thích.
 
 ```bash
-# Lệnh build gói hoàn chỉnh
+npm install
 npm run build
-
-# Khởi chạy server đơn Express CommonJS bundle
-npm run start
+npx cap sync android
+cd android
+./gradlew assembleDebug
 ```
 
----
+Trên Windows, có thể dùng `gradlew.bat assembleDebug` trong thư mục `android`.
 
-## 7. Tổng Kết Các Chức Năng Đã Hoàn Thành
+## Firebase realtime
 
-1. ✅ **Công thức CRS chuẩn (Pure TypeScript):** Đã cài đặt đúng công thức và kiểm thử tự động (6 Unit tests pass 100%).
-2. ✅ **Đăng nhập 3 chế độ:** Google Auth, Dùng thử Demo, và Dev Mode có bảng điều khiển thử nghiệm.
-3. ✅ **Onboarding 3 bước:** Lưu thông tin tỉnh ĐBSCL, giống sầu riêng (Ri6/Monthong), quy mô công đất và mã thiết bị.
-4. ✅ **Tab Tổng quan:** Đồng hồ CRS lớn, 4 thẻ cảm biến (pH, EC dS/m, độ ẩm, nhiệt độ), phân tích tác nhân gây nguy cơ.
-5. ✅ **Tab Xu hướng:** Biểu đồ Recharts responsive phân tích 24h, 7 ngày, 30 ngày, 90 ngày.
-6. ✅ **Tab Xử lý:** Lộ trình cải tạo đất theo mốc thời gian và mức chi phí (bón vôi CaCO3, xả mặn, xẻ rãnh, phân hữu cơ mùn).
-7. ✅ **Tab Trợ lý AI:** Chat tiếng Việt, câu hỏi gợi ý, đọc giọng nói SpeechSynthesis, tích hợp Gemini API server-side.
-8. ✅ **Tab Thiết bị:** Quản lý trạm IoT, trạng thái pin, tín hiệu 4G, sơ đồ kiến trúc phần cứng.
-9. ✅ **Dev Mode Panel:** Cho phép kéo slider thử nghiệm pH, EC, độ ẩm, nhiệt độ, giả lập tình huống Xanh/Vàng/Cam/Đỏ và chạy Unit tests trực tiếp.
+CDGuard chỉ sử dụng dữ liệu Firebase khi bản ghi có mã trạm đúng và tên cây trùng với cây đã tạo trong app. Đây là cách tránh lấy nhầm số đo của cây/vườn khác.
+
+Mẫu dữ liệu nên có các trường pH, EC, độ ẩm, nhiệt độ, mã trạm, thời gian và tên cây. Không gắn tên cây thì app sẽ giữ trạng thái **Chưa gán cây**, không tự tạo cảnh báo.
+
+## Trợ lý AI
+
+APK hiện có bộ kiến thức nội bộ gồm 100 cặp hỏi–đáp cho các chủ đề pH, EC, nước tưới, úng, rễ, phân bón, CRS và lấy mẫu đất.
+
+Muốn dùng mô hình GPT/Gemini trực tiếp, cần một máy chủ trung gian có API key. Không đặt API key trong APK vì người khác có thể trích xuất và sử dụng khóa đó. Endpoint `/api/chat` đã là vị trí phù hợp để kết nối mô hình sau này.
+
+## Lịch sử thay đổi
+
+### 1.12 — 06/09/2026
+
+- Thay nhận diện ứng dụng bằng logo CaGuard.
+- Xuất icon Android theo các kích thước cần thiết.
+
+### 1.11 — 06/09/2026
+
+- Thêm 100 cặp hỏi–đáp cơ bản cho Trợ lý CDGuard, dùng được offline.
+
+### 1.10 — 06/09/2026
+
+- Cây mới không còn kế thừa pH/CRS cũ.
+- Không hiện cảnh báo cho cây chưa có số đo.
+
+### 1.9 — 06/09/2026
+
+- Sửa nút thêm cây đầu tiên.
+- Chặn số đo Firebase chưa gắn đúng tên cây.
+
+### 1.8 — 06/09/2026
+
+- Thêm cố định vườn Phi Yến vào danh sách vườn.
+- Cập nhật địa chỉ Phong Điền, Cần Thơ.
+
+## Ghi nhận phát triển
+
+Dự án được xác định yêu cầu và kiểm tra bởi chủ dự án; các cập nhật mã nguồn gần đây có sự hỗ trợ của Codex (GPT). Mọi kết quả khuyến nghị nông nghiệp vẫn cần được người dùng và cán bộ chuyên môn đối chiếu trước khi áp dụng.
