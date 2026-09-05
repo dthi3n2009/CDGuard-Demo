@@ -2,72 +2,31 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Garden, ChatMessage } from '../types';
 import { sendChatMessage } from '../services/aiService';
 import { localStorageService } from '../services/localStorageService';
-import { calculateCRS, getCRSInfo } from '../utils/crsCalculator';
 import { ConsultationHistoryModal } from '../components/ConsultationHistoryModal';
-import { Send, Trash2, Sparkles, ChevronDown, ChevronUp, BookOpen, CheckCircle2, BookmarkCheck } from 'lucide-react';
+import { BASIC_FAQ_PAIRS } from '../data/basicFaq';
+import { Send, Trash2, Sparkles, BookOpen, CheckCircle2, BookmarkCheck } from 'lucide-react';
 
 interface AIAssistantTabProps {
   garden: Garden;
 }
 
-const QUICK_QUESTIONS = [
-  "Vì sao vườn đang cảnh báo?",
-  "Hôm nay tôi nên làm gì?",
-  "Có cần xét nghiệm đất không?"
-];
+const QUICK_QUESTIONS = BASIC_FAQ_PAIRS.filter((_, index) => index % 5 === 0).slice(0, 5).map(pair => pair.question);
 
 export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [expandedInit, setExpandedInit] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [toastNotice, setToastNotice] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const crsScore = calculateCRS(garden.ph, garden.ec, garden.moisture, garden.temperature);
-  const crsInfo = getCRSInfo(crsScore, garden.ph, garden.ec, garden.moisture, garden.temperature);
 
   const archivedSessions = localStorageService.getArchivedSessions();
 
-  // Generate structured short initial answer (80-120 words)
-  const getInitialAnswer = () => {
-    let issue = "Đất vườn đang gặp cảnh báo nguy cơ do độ chua cao và tích tụ mặn.";
-    if (garden.ph >= 5.8 && garden.ec <= 2.0 && garden.moisture <= 75) {
-      issue = "Đất vườn hiện tại ở mức an toàn, chưa phát hiện bất thường nghiêm trọng.";
-    }
-
-    let cause = `pH = ${garden.ph.toFixed(1).replace('.', ',')} (đất chua) và EC = ${garden.ec.toFixed(2).replace('.', ',')} dS/m.`;
-    let firstAction = "Khai thông rãnh thoát nước mương và đo lại độ mặn nước sông trước khi tưới.";
-    let labAdvice = "Khi điểm CRS duy trì trên 65 quá 2 tuần hoặc chuẩn bị thu hoạch xuất khẩu.";
-
-    return {
-      issue,
-      cause,
-      firstAction,
-      labAdvice
-    };
-  };
-
-  const initData = getInitialAnswer();
-
   useEffect(() => {
-    const history = localStorageService.getChatHistory();
-    if (history && history.length > 0) {
-      setMessages(history);
-    } else {
-      const welcomeText = `👨‍🌾 Chào chú chủ vườn **${garden.name}**!\n\n1. **Vấn đề hiện tại:** ${initData.issue}\n2. **Nguyên nhân:** ${initData.cause}\n3. **Việc cần làm đầu tiên:** ${initData.firstAction}\n4. **Khi nào cần xét nghiệm:** ${initData.labAdvice}`;
-
-      const initMsg: ChatMessage = {
-        id: 'init-msg',
-        sender: 'assistant',
-        text: welcomeText,
-        timestamp: Date.now()
-      };
-      setMessages([initMsg]);
-      localStorageService.saveChatHistory([initMsg]);
-    }
+    // Preserve real conversations, but do not revive old generated welcome messages.
+    setMessages(localStorageService.getChatHistory().filter(message => !message.id.startsWith('init-msg')));
   }, [garden.id]);
 
   useEffect(() => {
@@ -116,16 +75,8 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
 
     const saved = localStorageService.archiveCurrentChatSession(messages, garden.name);
     if (saved) {
-      const welcomeText = `👨‍🌾 Chào chú chủ vườn **${garden.name}**!\n\nĐã lưu đợt tư vấn vừa rồi vào **Hồ sơ người dùng**.\n\n1. **Vấn đề hiện tại:** ${initData.issue}\n2. **Nguyên nhân:** ${initData.cause}\n3. **Việc cần làm đầu tiên:** ${initData.firstAction}\n4. **Khi nào cần xét nghiệm:** ${initData.labAdvice}`;
-
-      const initMsg: ChatMessage = {
-        id: 'init-msg-' + Date.now(),
-        sender: 'assistant',
-        text: welcomeText,
-        timestamp: Date.now()
-      };
-      setMessages([initMsg]);
-      localStorageService.saveChatHistory([initMsg]);
+      setMessages([]);
+      localStorageService.saveChatHistory([]);
 
       setToastNotice('Đã lưu cuộc trò chuyện vào Hồ Sơ Tư Vấn! Màn hình chat đã được làm mới.');
       setTimeout(() => setToastNotice(null), 4500);
@@ -133,16 +84,8 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
   };
 
   const handleDirectClearWithoutArchive = () => {
-    const welcomeText = `👨‍🌾 Chào chú chủ vườn **${garden.name}**!\n\nMàn hình trò chuyện đã được làm mới.\n\n1. **Vấn đề hiện tại:** ${initData.issue}\n2. **Nguyên nhân:** ${initData.cause}\n3. **Việc cần làm đầu tiên:** ${initData.firstAction}\n4. **Khi nào cần xét nghiệm:** ${initData.labAdvice}`;
-
-    const initMsg: ChatMessage = {
-      id: 'init-msg-' + Date.now(),
-      sender: 'assistant',
-      text: welcomeText,
-      timestamp: Date.now()
-    };
-    setMessages([initMsg]);
-    localStorageService.saveChatHistory([initMsg]);
+    setMessages([]);
+    localStorageService.saveChatHistory([]);
     setShowClearConfirmModal(false);
 
     setToastNotice('Đã làm mới màn hình nhắn tin.');
@@ -184,10 +127,9 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
                 <h2 className="font-extrabold text-xs sm:text-sm text-slate-900 truncate leading-tight">
                   Trợ Lý CDGuard
                 </h2>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" title="Đang hoạt động" />
               </div>
               <p className="text-[10px] text-slate-500 font-medium truncate">
-                Vườn: {garden.name}
+                Vườn: {garden.name} · 100 câu hỏi–đáp cơ bản
               </p>
             </div>
           </div>
@@ -226,9 +168,15 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
 
       {/* 2. Spacious Main Chat Viewport */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-5 bg-slate-50 space-y-4">
+        {messages.length === 0 && (
+          <div className="p-4 text-sm text-slate-600 space-y-2">
+            <h3 className="font-bold text-slate-900">Bạn muốn trao đổi điều gì?</h3>
+            <p>Nhập câu hỏi về vườn hoặc chọn một câu hỏi gợi ý bên dưới. Trợ lý chỉ trả lời sau khi bạn gửi câu hỏi.</p>
+            <p>Hãy cho biết triệu chứng và số đo thực tế nếu có. Chưa có số đo thì không thể kết luận tình trạng đất.</p>
+          </div>
+        )}
         {messages.map((msg, idx) => {
           const isUser = msg.sender === 'user';
-          const isFirstAssistant = !isUser && idx === 0;
 
           return (
             <div
@@ -252,26 +200,6 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
                   {isUser ? msg.text : renderFormattedText(msg.text)}
                 </div>
 
-                {/* Optional Expandable Deep Detail Button for First Welcome Message */}
-                {isFirstAssistant && (
-                  <div className="mt-3 pt-3 border-t border-slate-200/90">
-                    <button
-                      onClick={() => setExpandedInit(!expandedInit)}
-                      className="text-xs sm:text-sm font-extrabold text-[#2D7D46] hover:underline flex items-center gap-1.5 min-h-[38px]"
-                    >
-                      <span>{expandedInit ? 'Thu gọn giải thích' : 'Xem giải thích chi tiết chỉ số'}</span>
-                      {expandedInit ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </button>
-
-                    {expandedInit && (
-                      <div className="mt-2 p-3 bg-emerald-50/70 rounded-xl border border-emerald-200 text-xs sm:text-sm text-slate-800 space-y-2 font-sans">
-                        <p>• <strong>Độ chua pH ({garden.ph.toFixed(1)}):</strong> Khi pH giảm sâu dưới 5,5, các kim loại trong đất hòa tan tự do trong dung dịch đất.</p>
-                        <p>• <strong>Độ mặn EC ({garden.ec.toFixed(2)}):</strong> Muối kết hợp với clo hình thành phức chất Cadmium hòa tan mạnh.</p>
-                        <p>• <strong>Độ ẩm ({garden.moisture}%):</strong> Nước ngập làm rễ bị nghẹt oxy, làm suy yếu sức đề kháng của cây sầu riêng.</p>
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 <div
                   className={`text-[11px] font-semibold mt-1.5 text-right ${

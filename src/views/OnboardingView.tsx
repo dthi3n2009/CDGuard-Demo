@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Garden } from '../types';
+import { VietnamAddressFields, isValidGardenAddress, GardenAddress } from '../components/VietnamAddressFields';
 import { fetchLatestFirebaseReading } from '../services/firebaseService';
 import { roomStorageService, TreeLocation } from '../services/roomStorageService';
 import { MapPin, Sprout, Cpu, ArrowRight, ArrowLeft, CheckCircle2, Wifi, Sparkles, Loader2, Ruler, Calendar, Plus, Trash2, TreeDeciduous } from 'lucide-react';
@@ -9,15 +10,6 @@ interface OnboardingViewProps {
   onSkipToDemo: () => void;
 }
 
-const PROVINCE_SUGGESTIONS = [
-  'Tiền Giang',
-  'Bến Tre',
-  'Vĩnh Long',
-  'Đồng Tháp',
-  'Cần Thơ',
-  'Sóc Trăng'
-];
-
 export const OnboardingView: React.FC<OnboardingViewProps> = ({
   onComplete,
   onSkipToDemo
@@ -25,8 +17,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // Form State
-  const [province, setProvince] = useState('Tiền Giang');
-  const [district, setDistrict] = useState('Cai Lậy');
+  const [location, setLocation] = useState<GardenAddress>({ province: '', district: '', ward: '', address: '' });
   const [name, setName] = useState('Vườn Sầu Riêng Mới');
   const [shape, setShape] = useState<'rectangle' | 'square'>('rectangle');
   const [length, setLength] = useState<number>(70);
@@ -40,11 +31,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
   const [fertilizerType, setFertilizerType] = useState('Hữu cơ vi sinh & NPK');
 
   // Initial trees in the garden
-  const [trees, setTrees] = useState<Array<{ name: string; variety: string; age: number }>>([
-    { name: 'Cây Sầu Riêng #1', variety: 'Sầu riêng Ri6', age: 12 },
-    { name: 'Cây Sầu Riêng #2', variety: 'Sầu riêng Ri6', age: 12 },
-    { name: 'Cây Sầu Riêng #3', variety: 'Sầu riêng Ri6', age: 12 }
-  ]);
+  const [trees, setTrees] = useState<Array<{ name: string; variety: string; age: number }>>([]);
 
   const [deviceId, setDeviceId] = useState('esp32-01');
   const [testingDevice, setTestingDevice] = useState(false);
@@ -81,7 +68,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
     setTestResult(null);
     try {
       const res = await fetchLatestFirebaseReading();
-      if (res.success && res.data) {
+      if (res.success && res.data && res.online && res.data.deviceId === deviceId.trim()) {
         setTestResult({
           success: true,
           message: `Kết nối thành công với trạm ${res.data.deviceId}! Nhận tín hiệu cảm biến (pH ${res.data.ph}, EC ${res.data.ec} dS/m).`
@@ -89,7 +76,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
       } else {
         setTestResult({
           success: false,
-          message: res.errorMsg || 'Không kết nối được Firebase. Bạn có thể bấm tiếp tục để dùng dữ liệu demo!'
+          message: res.errorMsg || 'Chưa có số đo mới từ đúng mã trạm đã nhập. Chưa xác nhận kết nối thiết bị.'
         });
       }
     } catch (e: any) {
@@ -103,13 +90,13 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
   };
 
   const handleFinish = () => {
+    if (!isValidGardenAddress(location)) { setStep(1); return; }
     const newGardenId = 'garden-' + Date.now();
     const garden: Garden = {
       id: newGardenId,
       deviceId,
       name,
-      province,
-      district,
+      ...location,
       shape,
       length,
       width: shape === 'square' ? length : width,
@@ -124,8 +111,9 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
       moisture: 70,
       temperature: 28.5,
       battery: 90,
-      online: true,
-      lastUpdated: Date.now()
+      online: false,
+      hasVerifiedReading: false,
+      lastUpdated: 0
     };
 
     // Save initial trees into room storage
@@ -178,43 +166,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
             </div>
 
             <div className="space-y-3 text-xs">
-              <div>
-                <label className="font-bold block mb-1">Tỉnh / Thành phố:</label>
-                <div className="grid grid-cols-3 gap-1.5 mb-2">
-                  {PROVINCE_SUGGESTIONS.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setProvince(p)}
-                      className={`px-2 py-1.5 rounded-xl border text-[11px] font-semibold transition-all ${
-                        province === p
-                          ? 'bg-emerald-100 border-[#2D7D46] text-[#2D7D46] font-bold'
-                          : 'bg-slate-50 border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={province}
-                  onChange={(e) => setProvince(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-[#2D7D46] outline-none"
-                  placeholder="Nhập tỉnh/thành"
-                />
-              </div>
-
-              <div>
-                <label className="font-bold block mb-1">Huyện / Quận / Thị xã:</label>
-                <input
-                  type="text"
-                  value={district}
-                  onChange={(e) => setDistrict(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-[#2D7D46] outline-none"
-                  placeholder="Ví dụ: Cai Lậy, Châu Thành..."
-                />
-              </div>
+              <VietnamAddressFields value={location} onChange={setLocation} />
 
               <div>
                 <label className="font-bold block mb-1">Tên vườn sầu riêng:</label>
@@ -390,7 +342,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
                 Bỏ qua
               </button>
               <button
-                onClick={() => setStep(2)}
+                onClick={() => { if (isValidGardenAddress(location)) setStep(2); else window.alert('Vui lòng chọn tỉnh/thành và xã/phường.'); }}
                 className="w-2/3 bg-[#2D7D46] hover:bg-emerald-700 text-white font-extrabold py-3 rounded-2xl flex items-center justify-center gap-2 shadow-md"
               >
                 <span>Tiếp tục</span>
@@ -540,10 +492,10 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
               <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-200 text-emerald-900 space-y-1">
                 <p className="font-bold text-xs flex items-center gap-1">
                   <Sparkles className="w-4 h-4 text-[#FFC107]" />
-                  Chế độ sẵn sàng Demo
+                  Có thể thiết lập vườn trước khi lắp trạm
                 </p>
                 <p className="text-[11px] leading-relaxed">
-                  Nếu chưa lắp trạm cảm biến thực tế, hệ thống sẽ tự động khởi tạo bộ dữ liệu giả lập chuẩn vườn sầu riêng ĐBSCL để bạn dùng thử đầy đủ tính năng.
+                  Nếu chưa có số đo từ đúng mã thiết bị, app sẽ báo chưa kết nối. Kết nối Firebase không đồng nghĩa trạm cảm biến đang hoạt động.
                 </p>
               </div>
             </div>

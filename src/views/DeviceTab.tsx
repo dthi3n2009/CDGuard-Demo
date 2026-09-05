@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Garden } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Garden, SyncStatusState } from '../types';
+import { isReadingFresh } from '../services/deviceStatus';
 import { fetchLatestFirebaseReading, sendSensorDataToFirebase } from '../services/firebaseService';
 import { SPOT_LOCATIONS } from '../services/demoDataService';
 import {
@@ -24,15 +25,15 @@ import {
 
 interface DeviceTabProps {
   garden: Garden;
+  syncStatus: SyncStatusState;
   onUpdateGarden: (updated: Garden) => void;
-  onSwitchToDemo: () => void;
   onOpenLiveSurvey?: () => void;
 }
 
 export const DeviceTab: React.FC<DeviceTabProps> = ({
   garden,
+  syncStatus,
   onUpdateGarden,
-  onSwitchToDemo,
   onOpenLiveSurvey
 }) => {
   const [syncing, setSyncing] = useState(false);
@@ -42,7 +43,6 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
   });
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
-  // Live Test Push State
   const [testTreeLocation, setTestTreeLocation] = useState<string>(SPOT_LOCATIONS[0]);
   const [testPh, setTestPh] = useState<number>(garden.ph);
   const [testEc, setTestEc] = useState<number>(garden.ec);
@@ -50,12 +50,14 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
   const [testTemp, setTestTemp] = useState<number>(garden.temperature);
   const [sendingToFirebase, setSendingToFirebase] = useState<boolean>(false);
   const [sendResult, setSendResult] = useState<{ success: boolean; message: string } | null>(null);
+  const showTestTools = false;
 
   // Time calculations
-  const now = Date.now();
-  const lastTs = garden.lastUpdated || now;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 10000); return () => clearInterval(timer); }, []);
+  const lastTs = garden.hasVerifiedReading ? garden.lastUpdated : 0;
   const minutesSinceLastReading = Math.floor((now - lastTs) / 60000);
-  const isDataFresh = minutesSinceLastReading <= 5;
+  const isDataFresh = !!garden.hasVerifiedReading && garden.online && isReadingFresh(lastTs, now);
 
   const formattedLastTime = new Date(lastTs).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) + ', ' + new Date(lastTs).toLocaleDateString('vi-VN');
 
@@ -64,9 +66,9 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
     setSyncResult({ status: null, message: '' });
     try {
       const res = await fetchLatestFirebaseReading();
-      if (res.success && res.data) {
-        const dataTs = res.data.ts || Date.now();
-        const fresh = (Date.now() - dataTs <= 300000); // 5 mins
+      if (res.success && res.data && res.data.deviceId === garden.deviceId) {
+        const dataTs = res.data.ts;
+        const fresh = res.online;
 
         onUpdateGarden({
           ...garden,
@@ -75,6 +77,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
           moisture: res.data.moisture,
           temperature: res.data.temp,
           online: fresh,
+          hasVerifiedReading: true,
           lastUpdated: dataTs
         });
 
@@ -86,13 +89,14 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
         } else {
           setSyncResult({
             status: 'success',
-            message: `Đã đồng bộ bản ghi gần nhất từ ESP32 (${res.data.deviceId}): pH ${res.data.ph}, EC ${res.data.ec} dS/m, Ẩm ${res.data.moisture}%, ${res.data.temp}°C (${new Date(dataTs).toLocaleTimeString('vi-VN')}).`
+            message: 'Đã đọc bản ghi cũ. Chưa có số đo mới, chưa xác nhận trạm đang kết nối.'
           });
         }
       } else {
+        onUpdateGarden({ ...garden, online: false });
         setSyncResult({
           status: 'network_error',
-          message: 'Điện thoại không truy cập được máy chủ. Vui lòng kiểm tra lại mạng.'
+          message: res.success ? 'Firebase có dữ liệu nhưng không phải mã trạm của vườn này.' : 'Chưa lấy được số đo hợp lệ. Kiểm tra mã trạm và mạng.'
         });
       }
     } catch (e: any) {
@@ -105,78 +109,24 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
     }
   };
 
-  // Live Test Data Push to Firebase
   const handleSendTestDataToFirebase = async (e: React.FormEvent) => {
     e.preventDefault();
     setSendingToFirebase(true);
     setSendResult(null);
-
     try {
       const res = await sendSensorDataToFirebase({
-        deviceId: garden.deviceId || 'esp32-01',
-        treeName: testTreeLocation,
-        locationName: testTreeLocation,
-        ph: testPh,
-        ec: testEc,
-        moisture: testMoisture,
-        temp: testTemp,
-        ts: Date.now()
+        deviceId: garden.deviceId || 'esp32-01', treeName: testTreeLocation, locationName: testTreeLocation,
+        ph: testPh, ec: testEc, moisture: testMoisture, temp: testTemp, ts: Date.now()
       });
-
-      // Synchronize garden state immediately
-      onUpdateGarden({
-        ...garden,
-        ph: testPh,
-        ec: testEc,
-        moisture: testMoisture,
-        temperature: testTemp,
-        online: true,
-        lastUpdated: Date.now()
-      });
-
       setSendResult(res);
-
-      // Re-fetch to confirm sync
-      setTimeout(() => {
-        handleSyncNow();
-      }, 800);
-    } catch (err: any) {
-      // Local fallback
-      onUpdateGarden({
-        ...garden,
-        ph: testPh,
-        ec: testEc,
-        moisture: testMoisture,
-        temperature: testTemp,
-        online: true,
-        lastUpdated: Date.now()
-      });
-      setSendResult({
-        success: true,
-        message: 'Đã cập nhật dữ liệu đo lên trạm mô phỏng thành công!'
-      });
     } finally {
       setSendingToFirebase(false);
     }
   };
 
   const applyPreset = (preset: 'safe' | 'caution' | 'warning') => {
-    if (preset === 'safe') {
-      setTestPh(6.45);
-      setTestEc(0.22);
-      setTestMoisture(72);
-      setTestTemp(28.0);
-    } else if (preset === 'caution') {
-      setTestPh(5.6);
-      setTestEc(1.8);
-      setTestMoisture(78);
-      setTestTemp(29.5);
-    } else {
-      setTestPh(4.8);
-      setTestEc(2.8);
-      setTestMoisture(85);
-      setTestTemp(32.0);
-    }
+    const values = preset === 'safe' ? [6.45, 0.22, 72, 28] : preset === 'caution' ? [5.6, 1.8, 78, 29.5] : [4.8, 2.8, 85, 32];
+    setTestPh(values[0]); setTestEc(values[1]); setTestMoisture(values[2]); setTestTemp(values[3]);
   };
 
   return (
@@ -237,17 +187,11 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
               <Cpu className="w-6 h-6" />
             </div>
             <div className="min-w-0">
-              <h2 className="font-extrabold text-base text-slate-900 truncate">Trạm Cảm Biến Đất (5 Cây)</h2>
-              <p className="text-xs text-slate-500 font-semibold truncate">Mã trạm: {garden.deviceId} • Vùng rễ 5 cây</p>
+              <h2 className="font-extrabold text-base text-slate-900 truncate">Trạm Cảm Biến Đất</h2>
+              <p className="text-xs text-slate-500 font-semibold truncate">Mã trạm: {garden.deviceId || 'Chưa khai báo'}</p>
             </div>
           </div>
 
-          <button
-            onClick={onSwitchToDemo}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl border border-slate-300 shrink-0 min-h-[44px]"
-          >
-            Chuyển sang Demo
-          </button>
         </div>
 
         {/* 3 DISAMBIGUATED CONNECTIONS */}
@@ -260,7 +204,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
               <span>1. Sóng trạm 4G LTE:</span>
             </div>
             <span className="font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-              Sóng tốt – 4G LTE Cat-1
+              Chưa có dữ liệu đo chất lượng sóng
             </span>
           </div>
 
@@ -271,7 +215,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
               <span>2. Kết nối Firebase RTDB:</span>
             </div>
             <span className="font-extrabold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
-              Máy chủ Firebase trực tuyến
+              {syncStatus === 'updated' ? 'Đã đọc được Firebase' : syncStatus === 'syncing' ? 'Đang kiểm tra…' : 'Chưa kết nối được Firebase'}
             </span>
           </div>
 
@@ -286,7 +230,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
             <span className={`font-extrabold px-2.5 py-1 rounded-lg ${
               isDataFresh ? 'text-emerald-800 bg-white' : 'text-amber-900 bg-white'
             }`}>
-              {isDataFresh ? 'Đang nhận dữ liệu trực tiếp' : `Chưa có số đo mới (${minutesSinceLastReading} phút)`}
+              {isDataFresh ? 'Có số đo mới từ đúng mã trạm' : lastTs ? `Chưa có số đo mới (${minutesSinceLastReading} phút)` : 'Chưa xác nhận kết nối thiết bị'}
             </span>
           </div>
 
@@ -295,7 +239,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
         {/* Specific Last Timestamp */}
         <div className="p-2.5 bg-slate-100 rounded-xl text-xs font-bold text-slate-700 flex justify-between items-center">
           <span>Dữ liệu mới nhất lúc:</span>
-          <span className="text-slate-900 font-extrabold">{formattedLastTime}</span>
+          <span className="text-slate-900 font-extrabold">{lastTs ? formattedLastTime : 'Chưa có dữ liệu xác minh'}</span>
         </div>
 
         {/* Sync Action & Feedback Result */}
@@ -329,6 +273,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
 
       </div>
 
+      {showTestTools && <>
       {/* 2. LIVE DEMO TEST: TRANSMIT DATA TO FIREBASE */}
       <div className="bg-gradient-to-br from-emerald-900 to-slate-900 text-white rounded-2xl p-4 sm:p-5 shadow-lg border border-emerald-700/40 space-y-3.5">
         <div className="flex items-center justify-between border-b border-emerald-800/80 pb-3">
@@ -510,17 +455,19 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
         </form>
       </div>
 
+      </>}
+
       {/* 3. SIMPLIFIED FARMER DEVICE DIAGRAM */}
       <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm border border-slate-200 space-y-3">
         <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
           <Layers className="w-5 h-5 text-[#2D7D46]" />
           <h3 className="font-black text-sm sm:text-base text-slate-900">
-            Sơ đồ Kết nối Trạm (5 Cây Vườn Sầu Riêng)
+            Sơ đồ nguyên lý kết nối trạm
           </h3>
         </div>
 
         <p className="text-xs text-slate-600 font-medium">
-          Trạng thái luồng truyền thông tin từ 5 cây trong vườn đến điện thoại:
+          Sơ đồ mô tả hệ thống, không phải xác nhận thiết bị đang kết nối:
         </p>
 
         {/* 4-Step Diagram */}
@@ -528,9 +475,9 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
           
           <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-300 space-y-1">
             <span className="text-lg block">🌳</span>
-            <span className="font-extrabold text-slate-900 block">1. 5 Cây Sầu Riêng</span>
+            <span className="font-extrabold text-slate-900 block">1. Cảm biến đất</span>
             <span className="text-[11px] font-bold text-emerald-800 bg-white px-2 py-0.5 rounded-full inline-block border border-emerald-200">
-              10 điểm đo rễ
+              Các vị trí bạn khai báo
             </span>
           </div>
 
@@ -546,7 +493,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
             <span className="text-lg block">📡</span>
             <span className="font-extrabold text-slate-900 block">3. Mạng 4G LTE</span>
             <span className="text-[11px] font-bold text-emerald-800 bg-white px-2 py-0.5 rounded-full inline-block border border-emerald-200">
-              Tín hiệu tốt
+              Chưa có dữ liệu sóng
             </span>
           </div>
 
@@ -554,7 +501,7 @@ export const DeviceTab: React.FC<DeviceTabProps> = ({
             <span className="text-lg block">🔥</span>
             <span className="font-extrabold text-slate-900 block">4. Firebase RTDB</span>
             <span className="text-[11px] font-bold text-emerald-800 bg-white px-2 py-0.5 rounded-full inline-block border border-emerald-200">
-              Đồng bộ tức thì
+              {syncStatus === 'updated' ? 'Đã đọc máy chủ' : 'Chưa xác nhận kết nối'}
             </span>
           </div>
 

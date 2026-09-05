@@ -1,5 +1,7 @@
 import { Garden, SensorReading, ConfigHistoryItem } from '../types';
 import { SPOT_LOCATIONS } from './demoDataService';
+import { PHI_YEN_GARDEN_ID, PHI_YEN_READINGS } from '../data/phiYenReadings';
+import { calculateCRS } from '../utils/crsCalculator';
 
 export type SyncState = 'syncing' | 'updated' | 'disconnected' | 'error';
 
@@ -81,117 +83,69 @@ const ROOM_KEYS = {
  * SQLite-like indexing, offline persistence, and cloud sync queue management.
  */
 export const roomStorageService = {
+  seedPhiYenMeasurements(): void {
+    const existingTrees = this.getTreeLocations(PHI_YEN_GARDEN_ID);
+    if (existingTrees.length === 0) {
+      const trees: TreeLocation[] = Array.from({ length: 15 }, (_, index) => {
+        const treeNumber = index + 1;
+        const readings = PHI_YEN_READINGS.filter(reading => Number(reading.treeId.slice(1)) === treeNumber);
+        const average = (key: 'ph' | 'ec' | 'moisture' | 'temperature') => readings.reduce((sum, reading) => sum + reading[key], 0) / readings.length;
+        const lastMeasuredAt = Math.max(...readings.map(reading => reading.timestamp));
+        const lastPh = average('ph');
+        const lastEc = average('ec');
+        const lastMoisture = average('moisture');
+        const lastTemp = average('temperature');
+        return {
+        id: `${PHI_YEN_GARDEN_ID}-tree-${index + 1}`,
+        gardenId: PHI_YEN_GARDEN_ID,
+        spotNumber: treeNumber,
+        name: `Cây ${String(treeNumber).padStart(2, '0')}`,
+        variety: 'Sầu riêng Ri6', treeAge: 0, height: 0, canopyWidth: 0,
+        row: Math.floor(index / 3) + 1, col: (index % 3) + 1,
+        lastPh, lastEc, lastMoisture, lastTemp, lastMeasuredAt,
+        lastCrs: calculateCRS(lastPh, lastEc, lastMoisture, lastTemp),
+        notes: 'Dữ liệu đo ngày 05/09/2026'
+      };
+      });
+      this.saveTreeLocations([...this.getTreeLocations(), ...trees]);
+    }
+    const existing = this.getMeasurements(PHI_YEN_GARDEN_ID);
+    if (existing.length > 0) return;
+    const records: DetailedMeasurement[] = PHI_YEN_READINGS.map(reading => ({
+      id: reading.id, gardenId: PHI_YEN_GARDEN_ID,
+      spotId: `${PHI_YEN_GARDEN_ID}-tree-${Number(reading.treeId.slice(1))}`,
+      locationName: `Cây ${Number(reading.treeId.slice(1))} — điểm ${reading.spot}`,
+      timestamp: reading.timestamp,
+      dayStr: new Date(reading.timestamp).toLocaleDateString('vi-VN'),
+      timeStr: new Date(reading.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+      sessionName: 'Trưa', ph: reading.ph, ec: reading.ec, moisture: reading.moisture,
+      temperature: reading.temperature,
+      crs: calculateCRS(reading.ph, reading.ec, reading.moisture, reading.temperature),
+      syncedToCloud: true, notes: reading.phase === 'sau-mua' ? 'Sau mưa' : 'Trước mưa'
+    }));
+    this.saveMeasurements([...this.getMeasurements(), ...records]);
+  },
+  subscribeTreeLocations(listener: () => void): () => void {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === ROOM_KEYS.TREES || event.key === null) listener();
+    };
+    window.addEventListener('cdguard:trees-changed', listener);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('cdguard:trees-changed', listener);
+      window.removeEventListener('storage', onStorage);
+    };
+  },
+
+  getNextTreeNumber(gardenId: string): number {
+    return this.getTreeLocations(gardenId).reduce((max, tree) => Math.max(max, tree.spotNumber), 0) + 1;
+  },
   // --- TREE LOCATIONS MANAGEMENT ---
   getTreeLocations(gardenId?: string): TreeLocation[] {
     try {
       const data = localStorage.getItem(ROOM_KEYS.TREES);
       let list: TreeLocation[] = data ? JSON.parse(data) : [];
       
-      // Seed 5 standard durian trees if empty or if containing legacy probe spot names
-      const hasLegacyNames = list.some(t => t.name.includes('(0.3m)') || t.name.includes('(1.5m)'));
-      if ((list.length === 0 || hasLegacyNames) && (!gardenId || gardenId === 'iot')) {
-        const DEFAULT_TREES: TreeLocation[] = [
-          {
-            id: 'tree-iot-1',
-            gardenId: 'iot',
-            spotNumber: 1,
-            row: 1,
-            col: 1,
-            name: 'Cây Sầu Riêng #1',
-            variety: 'Sầu riêng Ri6',
-            treeAge: 15,
-            height: 8.5,
-            canopyWidth: 7.0,
-            lastPh: 6.2,
-            lastEc: 0.25,
-            lastMoisture: 70,
-            lastTemp: 28.0,
-            lastCrs: 22,
-            lastMeasuredAt: Date.now() - 3600000,
-            notes: 'Gốc cao ráo, tán lá sum suê'
-          },
-          {
-            id: 'tree-iot-2',
-            gardenId: 'iot',
-            spotNumber: 2,
-            row: 1,
-            col: 2,
-            name: 'Cây Sầu Riêng #2',
-            variety: 'Sầu riêng Ri6',
-            treeAge: 15,
-            height: 8.8,
-            canopyWidth: 7.2,
-            lastPh: 6.4,
-            lastEc: 0.22,
-            lastMoisture: 72,
-            lastTemp: 28.0,
-            lastCrs: 20,
-            lastMeasuredAt: Date.now() - 7200000,
-            notes: 'Cây trung tâm vườn, rễ phát triển tốt'
-          },
-          {
-            id: 'tree-iot-3',
-            gardenId: 'iot',
-            spotNumber: 3,
-            row: 1,
-            col: 3,
-            name: 'Cây Sầu Riêng #3',
-            variety: 'Sầu riêng Ri6',
-            treeAge: 15,
-            height: 8.0,
-            canopyWidth: 6.8,
-            lastPh: 5.8,
-            lastEc: 0.32,
-            lastMoisture: 76,
-            lastTemp: 27.5,
-            lastCrs: 42,
-            lastMeasuredAt: Date.now() - 10800000,
-            notes: 'Gần mương tưới, đất hơi chua nhẹ'
-          },
-          {
-            id: 'tree-iot-4',
-            gardenId: 'iot',
-            spotNumber: 4,
-            row: 2,
-            col: 1,
-            name: 'Cây Sầu Riêng #4',
-            variety: 'Sầu riêng Monthong',
-            treeAge: 12,
-            height: 7.5,
-            canopyWidth: 6.2,
-            lastPh: 6.5,
-            lastEc: 0.20,
-            lastMoisture: 68,
-            lastTemp: 28.5,
-            lastCrs: 18,
-            lastMeasuredAt: Date.now() - 14400000,
-            notes: 'Gốc hướng Nam, thông thoáng'
-          },
-          {
-            id: 'tree-iot-5',
-            gardenId: 'iot',
-            spotNumber: 5,
-            row: 2,
-            col: 2,
-            name: 'Cây Sầu Riêng #5',
-            variety: 'Sầu riêng Monthong',
-            treeAge: 12,
-            height: 7.8,
-            canopyWidth: 6.5,
-            lastPh: 6.3,
-            lastEc: 0.24,
-            lastMoisture: 71,
-            lastTemp: 28.0,
-            lastCrs: 21,
-            lastMeasuredAt: Date.now() - 18000000,
-            notes: 'Gốc hướng Bắc, bộ rễ khỏe mạnh'
-          }
-        ];
-        // Retain non-iot trees if any, replace iot trees
-        const others = list.filter(t => t.gardenId !== 'iot');
-        list = [...others, ...DEFAULT_TREES];
-        this.saveTreeLocations(list);
-      }
 
       if (gardenId) {
         return list.filter(t => t.gardenId === gardenId);
@@ -206,6 +160,7 @@ export const roomStorageService = {
   saveTreeLocations(trees: TreeLocation[]): void {
     try {
       localStorage.setItem(ROOM_KEYS.TREES, JSON.stringify(trees));
+      window.dispatchEvent(new Event('cdguard:trees-changed'));
     } catch (e) {
       console.error('[Room DB] Error saving tree locations:', e);
     }

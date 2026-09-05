@@ -13,16 +13,25 @@ const STORAGE_KEYS = {
 };
 
 export const localStorageService = {
+  resetForNewUser(): void {
+    const keys = Object.keys(localStorage).filter(key => key.startsWith('cdguard_') || key.startsWith('room_'));
+    const backup = Object.fromEntries(keys.map(key => [key, localStorage.getItem(key)]));
+    // Save first: if storage is full, abort without removing the current data.
+    localStorage.setItem(`cdguard-backup-${Date.now()}`, JSON.stringify(backup));
+    keys.forEach(key => localStorage.removeItem(key));
+  },
   getGardens(): Garden[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.GARDENS);
       if (data) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           // Return saved gardens ensuring shape, dimensions, and age are properly populated
           return parsed.map((g: any) => ({
             ...DEFAULT_GARDEN,
             ...g,
+            online: false,
+            hasVerifiedReading: false,
             shape: g.shape || DEFAULT_GARDEN.shape || 'rectangle',
             length: g.length || DEFAULT_GARDEN.length || 70,
             width: g.width || DEFAULT_GARDEN.width || 50,
@@ -33,7 +42,7 @@ export const localStorageService = {
     } catch (e) {
       console.error('Error reading gardens from localStorage', e);
     }
-    return [DEFAULT_GARDEN];
+    return [];
   },
 
   saveGardens(gardens: Garden[]): void {
@@ -66,9 +75,8 @@ export const localStorageService = {
     }
     return {
       authMode: 'demo',
-      onboardingCompleted: true,
-      currentGardenId: 'iot',
-      autoFluctuateInDev: false
+      onboardingCompleted: false,
+      currentGardenId: 'iot'
     };
   },
 

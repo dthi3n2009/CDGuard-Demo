@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Garden, UserProfile, AppSettings, SyncStatusState } from './types';
 import { localStorageService } from './services/localStorageService';
-import { fetchLatestFirebaseReading, subscribeToGardenRealtime } from './services/firebaseService';
+import { fetchLatestFirebaseReading, subscribeToGardenRealtime, getCurrentGoogleUser, logoutFirebase } from './services/firebaseService';
 import { DEFAULT_GARDEN } from './services/demoDataService';
+import { roomStorageService } from './services/roomStorageService';
 import { calculateCRS, getCRSInfo } from './utils/crsCalculator';
 
 import { LoginView } from './views/LoginView';
@@ -18,13 +19,26 @@ import { GardensManagementTab } from './views/GardensManagementTab';
 import { ExtensionsTab } from './views/ExtensionsTab';
 import { DeviceTab } from './views/DeviceTab';
 
-import { DevModePanel } from './components/DevModePanel';
 import { ConsultationHistoryModal } from './components/ConsultationHistoryModal';
 import { LiveSurveyModal } from './components/LiveSurveyModal';
 import { Toast } from './components/Toast';
 
 export default function App() {
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => localStorageService.getUserProfile());
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
+    const saved = localStorageService.getUserProfile();
+    return saved?.isDemo ? saved : null;
+  });
+  const [authLoading, setAuthLoading] = useState(true);
+  useEffect(() => {
+    let active = true;
+    getCurrentGoogleUser().then(user => {
+      if (!active || !user) return;
+      const profile = { id: user.uid, email: user.email || undefined, displayName: user.displayName || 'Chủ vườn', photoURL: user.photoURL || undefined, isDemo: false };
+      setUserProfile(profile);
+      localStorageService.saveUserProfile(profile);
+    }).catch(() => {}).finally(() => { if (active) setAuthLoading(false); });
+    return () => { active = false; };
+  }, []);
   const [settings, setSettings] = useState<AppSettings>(() => localStorageService.getSettings());
   const [gardens, setGardens] = useState<Garden[]>(() => localStorageService.getGardens());
   const [currentGardenId, setCurrentGardenId] = useState<string>(() => {
@@ -32,9 +46,21 @@ export default function App() {
     return saved.currentGardenId || 'iot';
   });
 
+  // Phi Yến is a supplied historical garden (05/09), so it must remain
+  // available in the garden selector even for people who already used an
+  // earlier build of the app.
+  useEffect(() => {
+    roomStorageService.seedPhiYenMeasurements();
+    setGardens(previous => {
+      if (previous.some(garden => garden.id === DEFAULT_GARDEN.id)) return previous;
+      const next = [...previous, DEFAULT_GARDEN];
+      localStorageService.saveGardens(next);
+      return next;
+    });
+  }, []);
+
   const [activeTab, setActiveTab] = useState<TabType>('overview');
-  const [showDevPanel, setShowDevPanel] = useState<boolean>(false);
-  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => !localStorageService.getSettings().onboardingCompleted);
   const [showGlobalHistoryModal, setShowGlobalHistoryModal] = useState<boolean>(false);
   const [showLiveSurveyModal, setShowLiveSurveyModal] = useState<boolean>(false);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'warning' | 'danger' | 'success' } | null>(null);
@@ -64,6 +90,13 @@ export default function App() {
 
   // Check CRS Level Shifts
   useEffect(() => {
+    const hasTreeMeasurement = roomStorageService
+      .getTreeLocations(currentGarden.id)
+      .some(tree => tree.lastPh !== undefined && tree.lastEc !== undefined && tree.lastMoisture !== undefined && tree.lastTemp !== undefined);
+    if (!hasTreeMeasurement) {
+      setPrevCrsLevel(null);
+      return;
+    }
     const crsScore = calculateCRS(currentGarden.ph, currentGarden.ec, currentGarden.moisture, currentGarden.temperature);
     const crsInfo = getCRSInfo(crsScore, currentGarden.ph, currentGarden.ec, currentGarden.moisture, currentGarden.temperature);
 
@@ -74,7 +107,7 @@ export default function App() {
       });
     }
     setPrevCrsLevel(crsInfo.levelText);
-  }, [currentGarden.ph, currentGarden.ec, currentGarden.moisture, currentGarden.temperature]);
+  }, [currentGarden.id, currentGarden.ph, currentGarden.ec, currentGarden.moisture, currentGarden.temperature]);
 
   // Manual Trigger: Immediate Sync with Firebase
   const handleManualSync = useCallback(async () => {
@@ -82,25 +115,31 @@ export default function App() {
     try {
       const res = await fetchLatestFirebaseReading();
       setLastSyncTime(Date.now());
-      if (res.success && res.data) {
+      const current = currentGardenRef.current;
+      const matchedTree = res.data?.treeName && roomStorageService
+        .getTreeLocations(current.id)
+        .some(tree => tree.name === res.data?.treeName);
+      if (res.success && res.data && res.data.deviceId === current.deviceId && matchedTree) {
         setSyncStatus('updated');
         updateCurrentGarden({
-          ...currentGardenRef.current,
+          ...current,
           ph: res.data.ph,
           ec: res.data.ec,
           moisture: res.data.moisture,
           temperature: res.data.temp,
           online: res.online,
-          lastUpdated: res.data.ts || Date.now()
+          hasVerifiedReading: true,
+          lastUpdated: res.data.ts
         });
         setToast({
-          message: `Đã đồng bộ dữ liệu Realtime từ ESP32 (${res.data.deviceId}): pH ${res.data.ph}, EC ${res.data.ec} dS/m`,
+          message: res.online ? `Đã nhận số đo mới cho ${res.data.treeName}.` : 'Đã đọc bản ghi cũ từ Firebase; chưa có số đo mới từ trạm.',
           type: 'success'
         });
       } else {
         setSyncStatus('disconnected');
+        updateCurrentGarden({ ...currentGardenRef.current, online: false });
         setToast({
-          message: 'Không thể kết nối tới trạm đo Firebase. Vui lòng kiểm tra lại mạng.',
+          message: 'Firebase chưa có bản ghi gắn tên cây cho vườn này nên không thể tổng hợp toàn vườn.',
           type: 'warning'
         });
       }
@@ -111,19 +150,18 @@ export default function App() {
 
   // Active Real-time Firebase RTDB Stream + Continuous Polling Fallback
   useEffect(() => {
-    if (!userProfile) return;
+    if (!userProfile || gardens.length === 0 || showOnboarding) return;
 
     const unsubscribe = subscribeToGardenRealtime((state) => {
-      setSyncStatus(state.status);
       setLastSyncTime(state.lastSyncTime);
 
-      // In Dev mode with auto fluctuation off, do not overwrite manually set values
-      if (userProfile.isDevMode && !settings.autoFluctuateInDev) {
-        return;
-      }
+      const cur = currentGardenRef.current;
+      const matchedTree = state.reading.data?.treeName && roomStorageService
+        .getTreeLocations(cur.id)
+        .some(tree => tree.name === state.reading.data?.treeName);
 
-      if (state.reading.success && state.reading.data) {
-        const cur = currentGardenRef.current;
+      if (state.reading.success && state.reading.data && state.reading.data.deviceId === cur.deviceId && matchedTree) {
+        setSyncStatus(state.status);
         updateCurrentGarden({
           ...cur,
           ph: state.reading.data.ph,
@@ -131,18 +169,22 @@ export default function App() {
           moisture: state.reading.data.moisture,
           temperature: state.reading.data.temp,
           online: state.reading.online,
-          lastUpdated: state.reading.data.ts || Date.now()
+          hasVerifiedReading: true,
+          lastUpdated: state.reading.data.ts
         });
+      } else {
+        setSyncStatus('disconnected');
+        updateCurrentGarden({ ...currentGardenRef.current, online: false });
       }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [userProfile, settings.autoFluctuateInDev, updateCurrentGarden]);
+  }, [userProfile, gardens.length, showOnboarding, updateCurrentGarden]);
 
   // Handle Login Event
-  const handleLoginSuccess = (profile: UserProfile, authMode: 'google' | 'demo' | 'dev') => {
+  const handleLoginSuccess = (profile: UserProfile, authMode: 'google' | 'demo') => {
     setUserProfile(profile);
     localStorageService.saveUserProfile(profile);
 
@@ -150,13 +192,12 @@ export default function App() {
       ...settings,
       authMode,
       currentGardenId,
-      onboardingCompleted: true
+      onboardingCompleted: settings.onboardingCompleted
     };
     setSettings(newSettings);
     localStorageService.saveSettings(newSettings);
 
-    // Skip onboarding tutorial modal directly as requested
-    setShowOnboarding(false);
+    setShowOnboarding(!settings.onboardingCompleted || gardens.length === 0);
 
     setToast({
       message: `Đăng nhập thành công! Đang hiển thị trạng thái đất vườn.`,
@@ -165,10 +206,15 @@ export default function App() {
   };
 
   // Handle Logout Event
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (!userProfile?.isDemo) {
+      try { await logoutFirebase(); } catch {
+        setToast({ message: 'Chưa đăng xuất được Firebase. Vui lòng thử lại.', type: 'warning' });
+        return;
+      }
+    }
     setUserProfile(null);
     localStorageService.saveUserProfile(null);
-    setShowDevPanel(false);
     setToast({
       message: 'Đã đăng xuất thành công.',
       type: 'info'
@@ -200,6 +246,13 @@ export default function App() {
   };
 
   const handleSkipOnboarding = () => {
+    // Entering the example garden is an explicit choice, never a first-run default.
+    if (gardens.length === 0) {
+      roomStorageService.seedPhiYenMeasurements();
+      setGardens([DEFAULT_GARDEN]);
+      localStorageService.saveGardens([DEFAULT_GARDEN]);
+      setCurrentGardenId(DEFAULT_GARDEN.id);
+    }
     const updatedSettings = {
       ...settings,
       onboardingCompleted: true
@@ -210,6 +263,7 @@ export default function App() {
   };
 
   // Render Login View if not logged in
+  if (authLoading) return <div className="p-8 text-center">Đang kiểm tra phiên đăng nhập…</div>;
   if (!userProfile) {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
@@ -249,8 +303,16 @@ export default function App() {
         onOpenAddGarden={() => setShowOnboarding(true)}
         userProfile={userProfile}
         onLogout={handleLogout}
-        isDevMode={userProfile.isDevMode}
-        onToggleDevPanel={() => setShowDevPanel(true)}
+        onResetApp={async () => {
+          if (!window.confirm('Đưa app về lần sử dụng đầu tiên? Bạn sẽ đăng xuất và thiết lập lại vườn, cây trên máy này. App lưu một bản sao dữ liệu cũ trên máy; dữ liệu Firebase không bị xóa.')) return;
+          try {
+            if (!userProfile.isDemo) await logoutFirebase();
+            localStorageService.resetForNewUser();
+            window.location.reload();
+          } catch {
+            setToast({ message: 'Không tạo được bản sao dữ liệu. App chưa được đặt lại.', type: 'warning' });
+          }
+        }}
         onOpenConsultationHistory={() => setShowGlobalHistoryModal(true)}
         syncStatus={syncStatus}
         lastSyncTime={lastSyncTime}
@@ -353,40 +415,12 @@ export default function App() {
         {(activeTab as string) === 'device' && (
           <DeviceTab
             garden={currentGarden}
+            syncStatus={syncStatus}
             onUpdateGarden={updateCurrentGarden}
             onOpenLiveSurvey={() => setShowLiveSurveyModal(true)}
-            onSwitchToDemo={() => {
-              updateCurrentGarden({
-                ...currentGarden,
-                ph: 5.4,
-                ec: 2.15,
-                moisture: 78,
-                temperature: 29.5,
-                online: true,
-                lastUpdated: Date.now()
-              });
-              setToast({
-                message: 'Đã chuyển trạm về chế độ dữ liệu Demo chuẩn.',
-                type: 'info'
-              });
-            }}
           />
         )}
       </main>
-
-
-      {/* Dev Mode Interactive Control Panel Overlay */}
-      {showDevPanel && (
-        <DevModePanel
-          garden={currentGarden}
-          onUpdateGarden={updateCurrentGarden}
-          onResetDemo={() => {
-            updateCurrentGarden(DEFAULT_GARDEN);
-            setToast({ message: 'Đã đặt lại dữ liệu demo ban đầu.', type: 'info' });
-          }}
-          onClose={() => setShowDevPanel(false)}
-        />
-      )}
 
       {/* Global Consultation History Modal */}
       {showGlobalHistoryModal && (

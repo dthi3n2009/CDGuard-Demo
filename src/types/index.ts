@@ -17,6 +17,11 @@ export interface Garden {
   name: string;
   province: string;
   district: string;
+  ward?: string;
+  provinceCode?: number;
+  wardCode?: number;
+  address?: string;
+  hasVerifiedReading?: boolean;
   area: number; // công đất (1 công = 1000m2)
   shape?: 'rectangle' | 'square' | 'custom'; // Hình dạng khuôn viên vườn (vuông / chữ nhật)
   length?: number; // Chiều dài (mét)
@@ -113,14 +118,12 @@ export interface UserProfile {
   displayName?: string;
   photoURL?: string;
   isDemo: boolean;
-  isDevMode: boolean;
 }
 
 export interface AppSettings {
-  authMode: 'none' | 'google' | 'demo' | 'dev';
+  authMode: 'none' | 'google' | 'demo';
   onboardingCompleted: boolean;
   currentGardenId: string;
-  autoFluctuateInDev: boolean;
 }
 
 export type SyncStatusState = 'syncing' | 'updated' | 'disconnected' | 'error';

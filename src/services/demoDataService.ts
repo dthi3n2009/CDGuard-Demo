@@ -1,12 +1,17 @@
 import { Garden, SensorReading, RemediationTask } from '../types';
 import { calculateCRS } from '../utils/crsCalculator';
+import { PHI_YEN_GARDEN_ID, getPhiYenAverage } from '../data/phiYenReadings';
+
+const phiYenAverage = getPhiYenAverage();
 
 export const DEFAULT_GARDEN: Garden = {
-  id: 'iot',
+  id: PHI_YEN_GARDEN_ID,
   deviceId: 'esp32-01',
-  name: 'Vườn 5 Cây Sầu Riêng Cai Lậy',
-  province: 'Tiền Giang',
-  district: 'Cai Lậy',
+  name: 'Vườn Sầu Riêng khu du lịch sinh thái Phi Yến',
+  province: 'Cần Thơ',
+  district: 'Phong Điền',
+  ward: 'Xã Phong Điền',
+  address: 'Đ. Nguyễn Văn Cừ, ấp Nhơn, Phong Điền, Cần Thơ 94806',
   shape: 'rectangle',
   length: 70, // 70 mét
   width: 50, // 50 mét
@@ -22,13 +27,14 @@ export const DEFAULT_GARDEN: Garden = {
   age: 15,
   waterSource: 'Nước mưa & Sông Tiền',
   fertilizerType: 'Hữu cơ vi sinh',
-  ph: 6.45,
-  ec: 0.22, // dS/m (Rất sạch, hoàn toàn không nhiễm mặn)
-  moisture: 72, // % (Độ ẩm tốt nhờ mấy nay có mưa rào nhẹ)
-  temperature: 28.0, // °C (Mát mẻ)
-  battery: 92,
-  online: true,
-  lastUpdated: Date.now()
+  ph: Number(phiYenAverage.ph.toFixed(2)),
+  ec: Number(phiYenAverage.ec.toFixed(3)),
+  moisture: Number(phiYenAverage.moisture.toFixed(1)),
+  temperature: Number(phiYenAverage.temperature.toFixed(1)),
+  battery: 0,
+  online: false,
+  hasVerifiedReading: false,
+  lastUpdated: 0
 };
 
 export interface SpotMeasurement {

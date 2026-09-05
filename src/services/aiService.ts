@@ -1,5 +1,6 @@
 import { Garden, ChatMessage } from '../types';
 import { calculateCRS, getCRSInfo } from '../utils/crsCalculator';
+import { findBasicFaqAnswer } from '../data/basicFaq';
 
 export const MANDATORY_DISCLAIMER = "\n\n⚠️ Lưu ý: CDGuard chỉ đánh giá nguy cơ từ điều kiện đất, không thay thế kết quả xét nghiệm Cadmium tại phòng thí nghiệm.";
 
@@ -12,6 +13,9 @@ export async function sendChatMessage(
   history: ChatMessage[],
   garden: Garden
 ): Promise<string> {
+  const basicAnswer = findBasicFaqAnswer(message);
+  if (basicAnswer) return `**Trợ lý CDGuard:** ${basicAnswer}` + MANDATORY_DISCLAIMER;
+
   const crs = calculateCRS(garden.ph, garden.ec, garden.moisture, garden.temperature);
   const crsInfo = getCRSInfo(crs, garden.ph, garden.ec, garden.moisture, garden.temperature);
 
@@ -19,6 +23,8 @@ export async function sendChatMessage(
     name: garden.name,
     province: garden.province,
     district: garden.district,
+    ward: garden.ward,
+    address: garden.address,
     area: garden.area,
     soilType: garden.soilType,
     crop: garden.crop,
@@ -57,7 +63,8 @@ export async function sendChatMessage(
   }
 
   // Smart Rule-Based Engine Fallback
-  return generateRuleBasedResponse(message, garden, crs, crsInfo);
+  if (!garden.hasVerifiedReading) return 'Chưa kết nối được dịch vụ AI và chưa có số đo được xác minh của vườn. Mình chưa thể đánh giá tình trạng đất. Bạn hãy kết nối trạm đo hoặc cung cấp số đo thực tế để trao đổi tiếp.' + MANDATORY_DISCLAIMER;
+  return 'Chế độ ngoại tuyến: câu trả lời theo quy tắc có sẵn, không phải phản hồi từ Gemini.\n\n' + generateRuleBasedResponse(message, garden, crs, crsInfo);
 }
 
 function generateRuleBasedResponse(

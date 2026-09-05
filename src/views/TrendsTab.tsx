@@ -1,11 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Garden } from '../types';
 import {
-  generateDailyDetailedSpotData,
-  SpotMeasurement,
-  SPOT_LOCATIONS
+  SpotMeasurement
 } from '../services/demoDataService';
 import { localStorageService } from '../services/localStorageService';
+import { roomStorageService } from '../services/roomStorageService';
 import { calculateCRS } from '../utils/crsCalculator';
 import {
   ResponsiveContainer,
@@ -181,9 +180,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
 
   // Modal Add Sample State
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
-  const [newDayStr, setNewDayStr] = useState<string>(() => {
-    return '31/08';
-  });
+  const [newDayStr, setNewDayStr] = useState<string>(() => new Date().toLocaleDateString('vi-VN'));
   const [newTimeStr, setNewTimeStr] = useState<string>(() => {
     const now = new Date();
     const h = String(now.getHours()).padStart(2, '0');
@@ -196,7 +193,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
     if (h < 15) return 'Trưa';
     return 'Chiều';
   });
-  const [newLocation, setNewLocation] = useState<string>(SPOT_LOCATIONS[0]);
+  const [newLocation, setNewLocation] = useState<string>('');
   const [customLocationName, setCustomLocationName] = useState<string>('');
   const [newPh, setNewPh] = useState<number>(garden.ph);
   const [newEc, setNewEc] = useState<number>(garden.ec);
@@ -216,10 +213,20 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
 
   // Generate complete spot measurements (Custom user spots + Base pre-loaded spots)
   const allSpotReadings = useMemo(() => {
-    const baseSpots = generateDailyDetailedSpotData(garden);
-    // User custom spots come first so they appear at top
-    return [...customSpots, ...baseSpots];
+    const stored = roomStorageService.getMeasurements(garden.id).map((reading): SpotMeasurement => ({
+      id: reading.id, dayStr: reading.dayStr, timeStr: reading.timeStr,
+      dateObj: new Date(reading.timestamp), timestamp: reading.timestamp,
+      sessionName: reading.sessionName === 'Khác' ? 'Trưa' : reading.sessionName,
+      spotNumber: Number(reading.spotId.match(/C(\d+)/)?.[1] || 0),
+      locationName: reading.locationName, ph: reading.ph, ec: reading.ec,
+      moisture: reading.moisture, temperature: reading.temperature, crs: reading.crs
+    }));
+    return [...customSpots, ...stored];
   }, [garden, customSpots]);
+
+  const availableLocations = useMemo(() =>
+    Array.from(new Set(allSpotReadings.map(reading => reading.locationName))).sort(),
+  [allSpotReadings]);
 
   // Unique list of dates sorted chronologically
   const availableDates = useMemo(() => {
@@ -589,23 +596,23 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
               onClick={() => {
                 setDatePreset('1d');
                 setUseCustomDateRange(false);
-                setSelectedDateFilter('31/08');
+                setSelectedDateFilter(availableDates[availableDates.length - 1] || 'all');
               }}
               className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold shrink-0 transition-all cursor-pointer flex items-center gap-1 ${
-                datePreset === '1d' && selectedDateFilter === '31/08' && !useCustomDateRange
+                datePreset === '1d' && selectedDateFilter === (availableDates[availableDates.length - 1] || 'all') && !useCustomDateRange
                   ? 'bg-emerald-800 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              <span>⚡ Hôm nay (31/08 - Trưa)</span>
+              <span>⚡ Lần đo gần nhất</span>
             </button>
 
             {/* 7 Days */}
             <button
               onClick={() => {
                 setDatePreset('7d');
-                setFromDate('2026-08-25');
-                setToDate('2026-08-31');
+                setFromDate(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
+                setToDate(new Date().toISOString().slice(0, 10));
                 setUseCustomDateRange(true);
                 setSelectedDateFilter('all');
               }}
@@ -631,7 +638,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
                   : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
               }`}
             >
-              <span>📊 Toàn bộ (16 - 31/8)</span>
+              <span>📊 Toàn bộ dữ liệu</span>
             </button>
 
             {/* Custom Range Toggle */}
@@ -716,7 +723,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
                     : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
                 }`}
               >
-                Tất cả (16 - 31/8)
+                Tất cả ({allSpotReadings.length} mẫu)
               </button>
 
               {/* All Available Dates (16/08, 17/08, ... 31/08) */}
@@ -728,7 +735,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
                     onClick={() => {
                       setSelectedDateFilter(d);
                       setUseCustomDateRange(false);
-                      if (d === '31/08') {
+                      if (d === availableDates[availableDates.length - 1]) {
                         setDatePreset('1d');
                       } else {
                         setDatePreset('custom');
@@ -741,7 +748,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
                     }`}
                   >
                     <span>{d}</span>
-                    {d === '31/08' && (
+                    {d === availableDates[availableDates.length - 1] && (
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-black ${
                         isSelected ? 'bg-white text-emerald-800' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                       }`}>
@@ -794,7 +801,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-bold text-slate-800"
                 >
                   <option value="all">Tất cả 10 vị trí / 5 cây đo</option>
-                  {SPOT_LOCATIONS.map((loc) => (
+                  {availableLocations.map((loc) => (
                     <option key={loc} value={loc}>
                       {loc}
                     </option>
@@ -1275,7 +1282,7 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({
                   onChange={(e) => setNewLocation(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-900"
                 >
-                  {SPOT_LOCATIONS.map((loc) => (
+                  {availableLocations.map((loc) => (
                     <option key={loc} value={loc}>
                       {loc}
                     </option>

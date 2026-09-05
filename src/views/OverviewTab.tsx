@@ -121,36 +121,17 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     landmarkLocation: 'Ở giữa vườn (Gò cao)'
   });
 
-  // Load tree locations whenever current garden changes
+  // Keep the overview in sync without creating trees while reading the list.
   useEffect(() => {
-    let list = roomStorageService.getTreeLocations(garden.id);
-    // Auto-seed tree #1 for new or empty gardens so the plot has an initial anchor
-    if (list.length === 0) {
-      const defaultFirstTree: TreeLocation = {
-        id: `tree-${garden.id}-1`,
-        gardenId: garden.id,
-        spotNumber: 1,
-        row: 1,
-        col: 1,
-        name: `Cây ${garden.crop?.split(' ')[0] || 'Sầu Riêng'} #1`,
-        variety: garden.crop || 'Sầu riêng Ri6',
-        treeAge: garden.age || 10,
-        height: 7.0,
-        canopyWidth: 6.0,
-        lastPh: garden.ph || 6.3,
-        lastEc: garden.ec || 0.22,
-        lastMoisture: garden.moisture || 70,
-        lastTemp: garden.temperature || 28.0,
-        lastCrs: 20,
-        lastMeasuredAt: Date.now(),
-        notes: 'Gốc đầu tiên của vườn (đầu bờ liếp)'
-      };
-      list = roomStorageService.addOrUpdateTreeLocation(defaultFirstTree);
-    }
-    setTreeList(list);
-    // Reset selected tree when switching gardens
+    const refresh = () => {
+      const list = roomStorageService.getTreeLocations(garden.id);
+      setTreeList(list);
+      setSelectedTreeId(id => list.some(tree => tree.id === id) ? id : null);
+    };
+    refresh();
     setSelectedTreeId(null);
-  }, [garden.id, garden.crop, garden.age, garden.ph, garden.ec, garden.moisture, garden.temperature]);
+    return roomStorageService.subscribeTreeLocations(refresh);
+  }, [garden.id]);
 
   // Dynamic Garden Averages computed from all trees in the garden
   const gardenStats = useMemo(() => {
@@ -489,7 +470,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
     setTimeout(() => {
       setIsReadingSensor(false);
-      setSaveNotice('Đã cập nhật số đo mới nhất từ cảm biến phần cứng!');
+      setSaveNotice('Đã kiểm tra Firebase. Chỉ nhận số đo khi bản ghi được gắn đúng tên cây.');
       setTimeout(() => setSaveNotice(null), 2500);
     }, 600);
   };
@@ -566,7 +547,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const handleAddAdjacentTree = (rowNum: number, lastTreeInRow?: TreeLocation) => {
     const treesInThisRow = treeList.filter(t => (t.row && t.row > 0 ? t.row : 1) === rowNum);
     const nextCol = (lastTreeInRow?.col || treesInThisRow.length) + 1;
-    const nextTreeNum = treeList.length + 1;
+    const nextTreeNum = roomStorageService.getNextTreeNumber(garden.id);
     const prevName = lastTreeInRow?.name || `Cây đầu hàng`;
 
     setTargetRow(rowNum);
@@ -594,7 +575,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const handleAddRowBelow = () => {
     const currentMaxRow = treeList.reduce((max, t) => Math.max(max, t.row || 1), 1);
     const newRowNum = currentMaxRow + 1;
-    const nextTreeNum = treeList.length + 1;
+    const nextTreeNum = roomStorageService.getNextTreeNumber(garden.id);
 
     setTargetRow(newRowNum);
     setTargetCol(1);
@@ -618,7 +599,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     const rowNum = targetTree.row || 1;
     const treesInThisRow = treeList.filter(t => (t.row && t.row > 0 ? t.row : 1) === rowNum);
     const nextCol = (targetTree.col || treesInThisRow.length) + 1;
-    const nextTreeNum = treeList.length + 1;
+    const nextTreeNum = roomStorageService.getNextTreeNumber(garden.id);
 
     setTargetRow(rowNum);
     setTargetCol(nextCol);
@@ -650,7 +631,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   // Add tree submission from modal with audit history tracking
   const handleCreateNewTree = (e: React.FormEvent, continueNext: boolean = false) => {
     e.preventDefault();
-    const treeNumber = treeList.length + 1;
+    const treeNumber = roomStorageService.getNextTreeNumber(garden.id);
     const dirSuffix = addTreeDirection === 'right' ? ' (Bên phải)' : addTreeDirection === 'below' ? ' (Ở dưới)' : '';
     const treeName = newTreeForm.name.trim() || `Cây #${treeNumber}${dirSuffix}`;
 
@@ -723,6 +704,71 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const gardenShapeLabel = garden.shape === 'square' ? 'Hình vuông' : 'Hình chữ nhật';
   const gardenLength = garden.length || (garden.shape === 'square' ? 60 : 70);
   const gardenWidth = garden.width || (garden.shape === 'square' ? 60 : 50);
+  const selectedTreeHasMeasurement = Boolean(
+    selectedTree &&
+    selectedTree.lastPh !== undefined &&
+    selectedTree.lastEc !== undefined &&
+    selectedTree.lastMoisture !== undefined &&
+    selectedTree.lastTemp !== undefined
+  );
+
+  if (treeList.length === 0) {
+    return (
+      <>
+        <div className="p-5 bg-white rounded-2xl border border-emerald-200 text-center space-y-3">
+          <h2 className="font-extrabold text-slate-900">Chưa có số đo</h2>
+          <p className="text-sm text-slate-600">Hãy thêm cây và ghi nhận số đo đầu tiên. App sẽ chỉ tính chỉ số toàn vườn sau khi có dữ liệu cây.</p>
+          <button
+            onClick={() => {
+              setNewTreeForm(form => ({ ...form, name: `Cây ${roomStorageService.getNextTreeNumber(garden.id)}` }));
+              setTargetRow(1);
+              setTargetCol(1);
+              setActiveModal('add_tree');
+            }}
+            className="px-4 py-2 bg-emerald-700 text-white rounded-xl font-bold text-sm"
+          >
+            Thêm cây
+          </button>
+        </div>
+
+        {activeModal === 'add_tree' && (
+          <div onClick={() => setActiveModal(null)} className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4">
+            <form onClick={event => event.stopPropagation()} onSubmit={event => handleCreateNewTree(event, false)} className="bg-white rounded-3xl p-5 max-w-md w-full space-y-4 shadow-2xl">
+              <div className="flex items-center justify-between">
+                <h3 className="font-extrabold text-slate-900">Thêm cây đầu tiên</h3>
+                <button type="button" onClick={() => setActiveModal(null)} className="p-2 rounded-full bg-slate-100"><X className="w-5 h-5" /></button>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Tên cây</label>
+                <input autoFocus required value={newTreeForm.name} onChange={event => setNewTreeForm({ ...newTreeForm, name: event.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Vị trí</label>
+                <input value={newTreeForm.landmarkLocation} onChange={event => setNewTreeForm({ ...newTreeForm, landmarkLocation: event.target.value })} className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900" />
+              </div>
+              <button type="submit" className="w-full py-3 bg-emerald-700 text-white rounded-xl font-extrabold">Lưu cây</button>
+            </form>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  if (selectedTree && !selectedTreeHasMeasurement) {
+    return (
+      <div className="p-5 bg-white rounded-2xl border border-emerald-200 text-center space-y-3">
+        <div className="mx-auto w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+          <TreeDeciduous className="w-6 h-6" />
+        </div>
+        <h2 className="font-extrabold text-slate-900">{selectedTree.name} chưa có số đo</h2>
+        <p className="text-sm text-slate-600">Cây này vừa được thêm vào. Chưa có dữ liệu cảm biến hoặc số đo thực địa nên app chưa tính pH, CRS hay đưa cảnh báo.</p>
+        <div className="flex justify-center gap-2">
+          <button onClick={() => setSelectedTreeId(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm">Xem toàn vườn</button>
+          {onOpenLiveSurvey && <button onClick={onOpenLiveSurvey} className="px-4 py-2 bg-emerald-700 text-white rounded-xl font-bold text-sm">Ghi số đo đầu tiên</button>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-full flex flex-col gap-3 pb-8 select-none overflow-x-hidden">
@@ -749,7 +795,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
               </div>
               <p className="text-xs text-slate-500 font-medium flex items-center gap-1.5 mt-0.5 truncate">
                 <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                <span className="truncate">{garden.district}, {garden.province}</span>
+                <span className="truncate">{[garden.address, garden.ward || garden.district, garden.province].filter(Boolean).join(', ')}</span>
                 <span className="text-slate-300 shrink-0">•</span>
                 <span className="font-semibold text-slate-700 shrink-0">{garden.area} công</span>
                 <span className="text-slate-300 shrink-0">•</span>
@@ -834,7 +880,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 }`}
               >
                 <span>🌐</span>
-                <span>Toàn Vườn (Trung Bình {gardenStats.totalTrees} Cây)</span>
+                <span>{gardenStats.totalTrees ? `Toàn Vườn (Trung Bình ${gardenStats.totalTrees} Cây)` : 'Toàn Vườn (Chưa có cây)'}</span>
               </button>
 
               {/* Tree pills */}
@@ -958,7 +1004,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                   Toàn Vườn (Trung Bình)
                 </span>
                 <span className="font-black text-sm sm:text-base text-slate-900 truncate">
-                  Trung Bình Cộng Của {gardenStats.totalTrees} Gốc Cây Trong Vườn
+                  {gardenStats.totalTrees ? `Trung Bình Cộng Của ${gardenStats.totalTrees} Gốc Cây Trong Vườn` : 'Chưa có cây. Thêm cây để bắt đầu theo dõi từng gốc.'}
                 </span>
               </div>
               <p className="text-xs text-emerald-800 font-medium mt-0.5">
@@ -1752,7 +1798,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder={`Ví dụ: Cây #${treeList.length + 1} - Gốc Giáp Kênh`}
+                  placeholder={`Ví dụ: Cây #${roomStorageService.getNextTreeNumber(garden.id)} - Gốc Giáp Kênh`}
                   value={newTreeForm.name}
                   onChange={(e) => setNewTreeForm({ ...newTreeForm, name: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#2D7D46]"

@@ -1,6 +1,9 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
 import { SensorReading } from '../types';
+import { isReadingFresh } from './deviceStatus';
+import { Capacitor } from '@capacitor/core';
+import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 
 const metaEnv = (import.meta as any).env || {};
 
@@ -31,10 +34,32 @@ export function getFirebaseApp(): FirebaseApp | null {
   return firebaseApp;
 }
 
-export async function loginWithGoogle(): Promise<FirebaseUser | null> {
+type GoogleUser = Pick<FirebaseUser, 'uid' | 'email' | 'displayName' | 'photoURL'>;
+
+export async function getCurrentGoogleUser(): Promise<GoogleUser | null> {
+  if (Capacitor.isNativePlatform()) {
+    if (!Capacitor.isPluginAvailable('FirebaseAuthentication')) return null;
+    const { user } = await FirebaseAuthentication.getCurrentUser();
+    return user?.providerData.some(p => p.providerId === 'google.com') ? { ...user, photoURL: user.photoUrl } : null;
+  }
+  if (!DEFAULT_FIREBASE_CONFIG.apiKey) return null;
+  const app = getFirebaseApp();
+  if (!app) return null;
+  const auth = getAuth(app);
+  await auth.authStateReady();
+  return auth.currentUser?.providerData.some(p => p.providerId === 'google.com') ? auth.currentUser : null;
+}
+
+export async function loginWithGoogle(): Promise<GoogleUser | null> {
+  if (Capacitor.isNativePlatform()) {
+    if (!Capacitor.isPluginAvailable('FirebaseAuthentication')) throw new Error('Thiếu google-services.json cho com.cdguard.app. Chưa thể đăng nhập Google thật.');
+    const result = await FirebaseAuthentication.signInWithGoogle();
+    if (!result.user) throw new Error('Google chưa xác thực tài khoản.');
+    return { ...result.user, photoURL: result.user.photoUrl };
+  }
   const app = getFirebaseApp();
   if (!app || !DEFAULT_FIREBASE_CONFIG.apiKey) {
-    throw new Error('Chưa cấu hình Firebase Auth API key (VITE_FIREBASE_API_KEY). Vui lòng chọn tài khoản Google để đăng nhập trực tiếp.');
+    throw new Error('Bản app chưa được cấu hình Firebase Authentication. Không thể đăng nhập Google lúc này.');
   }
 
   try {
@@ -50,6 +75,10 @@ export async function loginWithGoogle(): Promise<FirebaseUser | null> {
 }
 
 export async function logoutFirebase(): Promise<void> {
+  if (Capacitor.isNativePlatform()) {
+    await FirebaseAuthentication.signOut();
+    return;
+  }
   const app = getFirebaseApp();
   if (app) {
     const auth = getAuth(app);
@@ -270,23 +299,27 @@ export function parseRecordToReading(record: any): FirebaseReadingResult {
   }
 
   const values = record.values || record;
-  const rawEc = typeof values.ec === 'number' ? values.ec : (typeof values.ec_val === 'number' ? values.ec_val : 0);
+  const rawEc = values.ec ?? values.ec_val;
+  const deviceId = record.device_id || record.deviceId;
+  if (!deviceId || ![values.ph, rawEc, values.moisture, values.temp].every(Number.isFinite)) {
+    return { success: false, online: false, errorMsg: 'Bản ghi thiếu mã thiết bị hoặc chỉ số cảm biến.' };
+  }
   
   // Convert µS/cm to dS/m (rawEc > 50 indicates µS/cm)
-  const ecDsm = rawEc > 50 ? rawEc / 1000 : (rawEc || 0.13);
+  const ecDsm = record.values ? rawEc / 1000 : rawEc > 50 ? rawEc / 1000 : rawEc;
 
-  const ts = typeof record.ts === 'number' ? record.ts : (typeof values.ts === 'number' ? values.ts : Date.now());
-  const isOnline = (Date.now() - ts) <= (30 * 60 * 1000); // 30 minutes window for active field hardware
+  const ts = typeof record.ts === 'number' ? record.ts : (typeof values.ts === 'number' ? values.ts : 0);
+  const isOnline = isReadingFresh(ts);
 
   return {
     success: true,
     online: isOnline,
     data: {
-      deviceId: record.device_id || record.deviceId || 'esp32-01',
-      treeName: record.tree_name || record.location || 'Vườn sầu riêng Cai Lậy (ESP32-01)',
+      deviceId,
+      treeName: record.tree_name || record.location,
       ph: typeof values.ph === 'number' ? parseFloat(values.ph.toFixed(2)) : 5.49,
-      ec: Number(ecDsm.toFixed(2)),
-      moisture: typeof values.moisture === 'number' ? Math.round(values.moisture) : 9,
+      ec: Number(ecDsm.toFixed(3)),
+      moisture: values.moisture,
       temp: typeof values.temp === 'number' ? parseFloat(values.temp.toFixed(1)) : 27.3,
       ts
     }

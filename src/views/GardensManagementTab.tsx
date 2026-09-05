@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Garden, ConfigHistoryItem } from '../types';
 import { roomStorageService, TreeLocation } from '../services/roomStorageService';
+import { VietnamAddressFields, isValidGardenAddress } from '../components/VietnamAddressFields';
 import {
   Trees,
   Plus,
@@ -66,8 +67,8 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
   // Garden Form State
   const [gardenForm, setGardenForm] = useState<Partial<Garden>>({
     name: '',
-    province: 'Tiền Giang',
-    district: 'Cai Lậy',
+    province: '',
+    district: '',
     shape: 'rectangle',
     length: 70,
     width: 50,
@@ -98,9 +99,10 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
 
   // Load tree locations & config history on mount / change
   useEffect(() => {
-    const list = roomStorageService.getTreeLocations(selectedGardenForTrees);
-    setTreeLocations(list);
+    const refresh = () => setTreeLocations(roomStorageService.getTreeLocations(selectedGardenForTrees));
+    refresh();
     setConfigHistory(roomStorageService.getConfigHistory());
+    return roomStorageService.subscribeTreeLocations(refresh);
   }, [selectedGardenForTrees]);
 
   const refreshHistory = () => {
@@ -112,8 +114,8 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
     setEditingGarden(null);
     setGardenForm({
       name: '',
-      province: 'Tiền Giang',
-      district: 'Cai Lậy',
+      province: '',
+      district: '',
       shape: 'rectangle',
       length: 70,
       width: 50,
@@ -153,6 +155,10 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
   const handleSaveGarden = (e: React.FormEvent) => {
     e.preventDefault();
     if (!gardenForm.name?.trim()) return;
+    if (!isValidGardenAddress({ province: gardenForm.province || '', district: gardenForm.district || '', ...gardenForm })) {
+      window.alert('Vui lòng chọn tỉnh/thành và xã/phường hiện nay.');
+      return;
+    }
 
     if (editingGarden) {
       const gLength = Number(gardenForm.length) || (gardenForm.shape === 'square' ? 60 : 70);
@@ -193,10 +199,14 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
 
       const newG: Garden = {
         id: 'garden-' + Date.now(),
-        deviceId: 'esp32-' + Math.floor(Math.random() * 89 + 10),
+        deviceId: gardenForm.deviceId || '',
         name: gardenForm.name || 'Vườn sầu riêng mới',
-        province: gardenForm.province || 'Tiền Giang',
-        district: gardenForm.district || 'Cai Lậy',
+        province: gardenForm.province || '',
+        district: '',
+        ward: gardenForm.ward,
+        wardCode: gardenForm.wardCode,
+        provinceCode: gardenForm.provinceCode,
+        address: gardenForm.address,
         shape: gardenForm.shape || 'rectangle',
         length: gLength,
         width: gWidth,
@@ -217,33 +227,12 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
         moisture: 70,
         temperature: 28,
         battery: 95,
-        online: true,
-        lastUpdated: Date.now()
+        online: false,
+        hasVerifiedReading: false,
+        lastUpdated: 0
       };
       onAddGarden(newG);
 
-      // Automatically initialize starter Tree #1 for the new garden
-      const initialTree: TreeLocation = {
-        id: `tree-${newG.id}-1`,
-        gardenId: newG.id,
-        spotNumber: 1,
-        row: 1,
-        col: 1,
-        name: `Cây ${newG.crop?.split(' ')[0] || 'Sầu Riêng'} #1`,
-        variety: newG.crop || 'Sầu riêng Ri6',
-        treeAge: Number(gardenForm.age) || 10,
-        height: 7.0,
-        canopyWidth: 6.0,
-        landmarkLocation: 'Góc 1 (Kênh ngọt)',
-        lastPh: 6.3,
-        lastEc: 0.22,
-        lastMoisture: 70,
-        lastTemp: 28.0,
-        lastCrs: 20,
-        lastMeasuredAt: Date.now(),
-        notes: 'Gốc đầu tiên của vườn'
-      };
-      roomStorageService.addOrUpdateTreeLocation(initialTree);
 
       // Save to audit history log
       roomStorageService.addConfigHistory({
@@ -262,7 +251,7 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
   const handleOpenAddTree = () => {
     setEditingTree(null);
     setTreeForm({
-      name: `Cây #${treeLocations.length + 1}`,
+      name: `Cây #${roomStorageService.getNextTreeNumber(selectedGardenForTrees)}`,
       variety: currentGarden?.crop || 'Sầu riêng Ri6',
       treeAge: currentGarden?.age || 12,
       height: 7.0,
@@ -286,8 +275,9 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
     e.preventDefault();
     if (!treeForm.name?.trim()) return;
 
-    const spotNum = editingTree ? editingTree.spotNumber : treeLocations.length + 1;
+    const spotNum = editingTree ? editingTree.spotNumber : roomStorageService.getNextTreeNumber(selectedGardenForTrees);
     const treeObj: TreeLocation = {
+      ...editingTree,
       id: editingTree ? editingTree.id : `tree-${selectedGardenForTrees}-${Date.now()}`,
       gardenId: selectedGardenForTrees,
       spotNumber: spotNum,
@@ -426,7 +416,7 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
                       </div>
                       <p className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
                         <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>{g.district}, {g.province}</span>
+                        <span>{[g.address, g.ward || g.district, g.province].filter(Boolean).join(', ')}</span>
                       </p>
                     </div>
 
@@ -783,6 +773,10 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
               </div>
 
               {/* Giống cây & Tuổi */}
+              <VietnamAddressFields value={{ province: gardenForm.province || '', district: gardenForm.district || '', ...gardenForm }} onChange={value => setGardenForm({ ...gardenForm, ...value })} />
+              <label className="block font-bold">Mã thiết bị (nếu đã lắp)
+                <input className="w-full p-2.5 border rounded-xl" value={gardenForm.deviceId || ''} onChange={e => setGardenForm({ ...gardenForm, deviceId: e.target.value.trim(), online: false, hasVerifiedReading: false })} placeholder="Ví dụ: esp32-01" />
+              </label>
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Giống sầu riêng</label>
