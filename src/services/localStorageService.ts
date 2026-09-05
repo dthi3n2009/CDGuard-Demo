@@ -80,11 +80,19 @@ export const localStorageService = {
     }
   },
 
-  getTasks(): RemediationTask[] {
+  getTasks(gardenId?: string): RemediationTask[] {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.TASKS);
+      const key = gardenId ? `${STORAGE_KEYS.TASKS}_${gardenId}` : STORAGE_KEYS.TASKS;
+      const data = localStorage.getItem(key);
       if (data) {
         return JSON.parse(data);
+      }
+      // Fallback to legacy global key if garden-specific not found yet
+      if (gardenId) {
+        const legacyData = localStorage.getItem(STORAGE_KEYS.TASKS);
+        if (legacyData) {
+          return JSON.parse(legacyData);
+        }
       }
     } catch (e) {
       console.error('Error reading tasks', e);
@@ -92,9 +100,10 @@ export const localStorageService = {
     return [];
   },
 
-  saveTasks(tasks: RemediationTask[]): void {
+  saveTasks(tasks: RemediationTask[], gardenId?: string): void {
     try {
-      localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(tasks));
+      const key = gardenId ? `${STORAGE_KEYS.TASKS}_${gardenId}` : STORAGE_KEYS.TASKS;
+      localStorage.setItem(key, JSON.stringify(tasks));
     } catch (e) {
       console.error('Error saving tasks', e);
     }

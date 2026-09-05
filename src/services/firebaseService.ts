@@ -33,14 +33,20 @@ export function getFirebaseApp(): FirebaseApp | null {
 
 export async function loginWithGoogle(): Promise<FirebaseUser | null> {
   const app = getFirebaseApp();
-  if (!app) {
-    throw new Error('Chưa cấu hình Firebase Auth API key. Vui lòng sử dụng chế độ Demo hoặc bổ sung VITE_FIREBASE_API_KEY.');
+  if (!app || !DEFAULT_FIREBASE_CONFIG.apiKey) {
+    throw new Error('Chưa cấu hình Firebase Auth API key (VITE_FIREBASE_API_KEY). Vui lòng chọn tài khoản Google để đăng nhập trực tiếp.');
   }
 
-  const auth = getAuth(app);
-  const provider = new GoogleAuthProvider();
-  const result = await signInWithPopup(auth, provider);
-  return result.user;
+  try {
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    return result.user;
+  } catch (err: any) {
+    console.warn('Firebase popup error:', err);
+    throw err;
+  }
 }
 
 export async function logoutFirebase(): Promise<void> {

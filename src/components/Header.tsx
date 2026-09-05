@@ -176,20 +176,40 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="relative">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
-              className="p-1.5 rounded-full bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 border border-emerald-600/50 flex items-center justify-center"
+              className="p-1 rounded-full bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 border border-emerald-600/50 flex items-center justify-center cursor-pointer transition-all"
+              title={userProfile?.email || 'Tài khoản'}
             >
-              <User className="w-4 h-4" />
+              {userProfile?.photoURL ? (
+                <img 
+                  src={userProfile.photoURL} 
+                  alt={userProfile.displayName || 'Google'} 
+                  className="w-6 h-6 rounded-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center justify-center">
+                  {(userProfile?.displayName || userProfile?.email || 'U').charAt(0).toUpperCase()}
+                </div>
+              )}
             </button>
 
             {showUserMenu && (
-              <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-[#E3E9E5] py-2 text-[#1F2D24] z-50">
-                <div className="px-3 py-1.5 border-b">
-                  <p className="text-xs font-bold truncate">
-                    {userProfile?.displayName || (isDevMode ? 'Dev Mode Tester' : 'Khách vãng lai')}
-                  </p>
-                  <p className="text-[10px] text-[#6B7D72] truncate">
+              <div className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-2xl border border-slate-200 py-2 text-[#1F2D24] z-50 animate-in fade-in zoom-in-95">
+                <div className="px-3.5 py-2 border-b border-slate-100">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-xs font-black text-slate-900 truncate">
+                      {userProfile?.displayName || (isDevMode ? 'Dev Mode Tester' : 'Chủ vườn Sầu riêng')}
+                    </p>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
                     {userProfile?.email || (isDevMode ? 'dev@saurieng.vn' : 'Chế độ Demo')}
                   </p>
+                  {userProfile?.email && (
+                    <div className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full mt-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                      <span>Tài khoản Google</span>
+                    </div>
+                  )}
                 </div>
 
                 {onOpenConsultationHistory && (
@@ -198,7 +218,7 @@ export const Header: React.FC<HeaderProps> = ({
                       setShowUserMenu(false);
                       onOpenConsultationHistory();
                     }}
-                    className="w-full text-left px-3 py-2 text-xs text-[#2D7D46] font-bold hover:bg-emerald-50 border-b flex items-center gap-2"
+                    className="w-full text-left px-3.5 py-2 text-xs text-[#2D7D46] font-bold hover:bg-emerald-50 border-b border-slate-100 flex items-center gap-2 cursor-pointer"
                   >
                     <BookOpen className="w-3.5 h-3.5" />
                     <span>Hồ sơ tư vấn & Nhật ký</span>
@@ -210,7 +230,7 @@ export const Header: React.FC<HeaderProps> = ({
                     setShowUserMenu(false);
                     setShowApkModal(true);
                   }}
-                  className="w-full text-left px-3 py-2 text-xs text-[#2D7D46] font-bold hover:bg-emerald-50 border-b flex items-center gap-2"
+                  className="w-full text-left px-3.5 py-2 text-xs text-[#2D7D46] font-bold hover:bg-emerald-50 border-b border-slate-100 flex items-center gap-2 cursor-pointer"
                 >
                   <Smartphone className="w-3.5 h-3.5" />
                   <span>Tải APK Demo / Cài App</span>
@@ -221,7 +241,7 @@ export const Header: React.FC<HeaderProps> = ({
                     setShowUserMenu(false);
                     onLogout();
                   }}
-                  className="w-full text-left px-3 py-2 text-xs text-red-600 font-bold hover:bg-red-50 flex items-center gap-2"
+                  className="w-full text-left px-3.5 py-2 text-xs text-red-600 font-bold hover:bg-red-50 flex items-center gap-2 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   <span>Đăng xuất / Chuyển tài khoản</span>

@@ -295,7 +295,11 @@ export default function App() {
         )}
 
         {activeTab === 'remediation' && (
-          <RemediationTab garden={currentGarden} />
+          <RemediationTab 
+            garden={currentGarden} 
+            gardens={gardens}
+            onSelectGarden={(gId) => setCurrentGardenId(gId)}
+          />
         )}
 
         {activeTab === 'gardens' && (

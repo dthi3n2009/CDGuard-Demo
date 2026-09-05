@@ -7,6 +7,7 @@ import {
   AlertTriangle, 
   CheckCircle2, 
   ChevronRight, 
+  ChevronLeft,
   X, 
   Droplet, 
   TestTube, 
@@ -53,6 +54,7 @@ type ModalType =
   | 'action_drain'
   | 'action_measure'
   | 'action_guide'
+  | 'action_dynamic'
   | 'add_tree'
   | 'add_garden'
   | null;
@@ -71,6 +73,13 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const [selectedTreeId, setSelectedTreeId] = useState<string | null>(null);
   const [treeList, setTreeList] = useState<TreeLocation[]>([]);
   const [activeModal, setActiveModal] = useState<ModalType>(null);
+  const [activeDynamicAction, setActiveDynamicAction] = useState<{
+    step: number;
+    title: string;
+    why: string;
+    how: string;
+    targetName: string;
+  } | null>(null);
   
   // Quick notice states
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
@@ -87,6 +96,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
   // 2D Scroll & Drag State for Plot Canvas
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const overviewTreeCarouselRef = useRef<HTMLDivElement>(null);
   const [isMouseDown, setIsMouseDown] = useState(false);
   const [startX, setStartX] = useState(0);
   const [startY, setStartY] = useState(0);
@@ -142,16 +152,67 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     setSelectedTreeId(null);
   }, [garden.id, garden.crop, garden.age, garden.ph, garden.ec, garden.moisture, garden.temperature]);
 
+  // Dynamic Garden Averages computed from all trees in the garden
+  const gardenStats = useMemo(() => {
+    if (!treeList || treeList.length === 0) {
+      return {
+        avgPh: garden.ph || 6.3,
+        avgEc: garden.ec || 0.22,
+        avgMoisture: garden.moisture || 70,
+        avgTemp: garden.temperature || 28.0,
+        minPh: garden.ph || 6.3,
+        maxPh: garden.ph || 6.3,
+        lowestPhTreeName: 'Chưa có',
+        highestPhTreeName: 'Chưa có',
+        totalTrees: 0
+      };
+    }
+
+    const phs = treeList.map(t => t.lastPh ?? garden.ph ?? 6.3);
+    const ecs = treeList.map(t => t.lastEc ?? garden.ec ?? 0.22);
+    const moists = treeList.map(t => t.lastMoisture ?? garden.moisture ?? 70);
+    const temps = treeList.map(t => t.lastTemp ?? garden.temperature ?? 28.0);
+
+    const avgPh = phs.reduce((a, b) => a + b, 0) / phs.length;
+    const avgEc = ecs.reduce((a, b) => a + b, 0) / ecs.length;
+    const avgMoisture = moists.reduce((a, b) => a + b, 0) / moists.length;
+    const avgTemp = temps.reduce((a, b) => a + b, 0) / temps.length;
+
+    let lowestTree = treeList[0];
+    let highestTree = treeList[0];
+    treeList.forEach(t => {
+      const p = t.lastPh ?? garden.ph ?? 6.3;
+      const lowP = lowestTree.lastPh ?? garden.ph ?? 6.3;
+      const highP = highestTree.lastPh ?? garden.ph ?? 6.3;
+      if (p < lowP) lowestTree = t;
+      if (p > highP) highestTree = t;
+    });
+
+    return {
+      avgPh,
+      avgEc,
+      avgMoisture,
+      avgTemp,
+      minPh: Math.min(...phs),
+      maxPh: Math.max(...phs),
+      lowestPhTreeName: lowestTree?.name || 'Cây thấp nhất',
+      highestPhTreeName: highestTree?.name || 'Cây cao nhất',
+      totalTrees: treeList.length
+    };
+  }, [treeList, garden]);
+
   // Find currently selected tree
   const selectedTree = useMemo(() => {
     return treeList.find(t => t.id === selectedTreeId) || null;
   }, [treeList, selectedTreeId]);
 
-  // Values for the selected tree (use tree's stored measurement or garden's real-time baseline)
-  const currentTreePh = selectedTree?.lastPh ?? garden.ph;
-  const currentTreeEc = selectedTree?.lastEc ?? garden.ec;
-  const currentTreeMoisture = selectedTree?.lastMoisture ?? garden.moisture;
-  const currentTreeTemp = selectedTree?.lastTemp ?? garden.temperature;
+  // Values for the selected view:
+  // When selectedTree is null -> "Toàn Vườn" uses actual Garden Average of all trees!
+  // When selectedTree is chosen -> uses that specific tree's stored measurement!
+  const currentTreePh = selectedTree ? (selectedTree.lastPh ?? garden.ph) : gardenStats.avgPh;
+  const currentTreeEc = selectedTree ? (selectedTree.lastEc ?? garden.ec) : gardenStats.avgEc;
+  const currentTreeMoisture = selectedTree ? (selectedTree.lastMoisture ?? garden.moisture) : gardenStats.avgMoisture;
+  const currentTreeTemp = selectedTree ? (selectedTree.lastTemp ?? garden.temperature) : gardenStats.avgTemp;
 
   const crsScore = calculateCRS(currentTreePh, currentTreeEc, currentTreeMoisture, currentTreeTemp);
   const crsInfo = getCRSInfo(crsScore, currentTreePh, currentTreeEc, currentTreeMoisture, currentTreeTemp);
@@ -222,6 +283,158 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
   const AlertIcon = alertCardConfig.icon;
 
+  // Context-aware dynamic actions based on selected tree / garden condition
+  const dynamicActions = useMemo(() => {
+    const actions: {
+      step: number;
+      title: string;
+      why: string;
+      how: string;
+      targetName: string;
+      tag?: string;
+      severity: 'high' | 'medium' | 'normal';
+    }[] = [];
+
+    const targetLabel = selectedTree ? selectedTree.name : `${garden.name} (Toàn Vườn)`;
+
+    // 1. Check pH issues
+    if (currentTreePh < 5.5) {
+      actions.push({
+        step: actions.length + 1,
+        title: `Bón vôi CaCO3 xử lý đất chua gắt (pH ${currentTreePh.toFixed(1).replace('.', ',')})`,
+        why: `Chỉ số pH tại ${targetLabel} đang ở mức ${currentTreePh.toFixed(1).replace('.', ',')} (quá chua). Trong đất chua, rễ tơ bị cháy đầu và cây hấp thụ nhiều kim loại nặng Cadimi.`,
+        how: `Bón vôi bột Dolomite hoặc CaCO3 khoảng 1,5 - 2,5 kg/gốc rải đều quanh đường kính tán, tưới ẩm để vôi tan từ từ nâng pH lên trên 6.0.`,
+        targetName: targetLabel,
+        tag: 'Ưu tiên cấp 1 - pH',
+        severity: 'high'
+      });
+    } else if (currentTreePh < 6.0) {
+      actions.push({
+        step: actions.length + 1,
+        title: `Nâng nhẹ pH đất (pH hiện tại ${currentTreePh.toFixed(1).replace('.', ',')})`,
+        why: `pH đất tại ${targetLabel} hơi chua nhẹ. Cần điều chỉnh để rễ cây hấp thu dinh dưỡng đa trung vi lượng tốt hơn.`,
+        how: `Bón lót thêm vôi lân nung chảy hoặc vôi nông nghiệp 0,8 - 1 kg/gốc kết hợp tưới nước giữ ẩm.`,
+        targetName: targetLabel,
+        tag: 'Điều chỉnh pH',
+        severity: 'medium'
+      });
+    }
+
+    // 2. Check EC / Salinity
+    if (currentTreeEc > 2.0) {
+      actions.push({
+        step: actions.length + 1,
+        title: `Tưới xả mặn và ngưng bón phân hóa học (EC ${currentTreeEc.toFixed(2).replace('.', ',')} mS/cm)`,
+        why: `Độ dẫn điện EC tại ${targetLabel} ở mức ${currentTreeEc.toFixed(2).replace('.', ',')} mS/cm là cao, có nguy cơ ngộ độc muối mặn hoặc tồn dư phân vô cơ thừa làm nghẹt rễ.`,
+        how: `Tưới xả liên tục 2-3 cữ bằng nước ngọt sông (EC < 0.5), tạm ngưng hoàn toàn NPK hóa học trong 7-10 ngày, bổ sung axit humic giải độc rễ.`,
+        targetName: targetLabel,
+        tag: 'Khẩn cấp - Nhiễm mặn',
+        severity: 'high'
+      });
+    }
+
+    // 3. Check Moisture
+    if (currentTreeMoisture > 75) {
+      actions.push({
+        step: actions.length + 1,
+        title: `Khơi thông rãnh thoát nước, chống nghẹt rễ (Độ ẩm ${Math.round(currentTreeMoisture)}%)`,
+        why: `Độ ẩm đất tại ${targetLabel} đo được ${Math.round(currentTreeMoisture)}% (rất ướt). Nước ứ đọng quanh mo gốc lâu ngày làm nấm Phytophthora phát triển mạnh và nghẹt oxy tầng rễ.`,
+        how: `Nạo vét rãnh thoát nước quanh mo gốc sâu 15-20cm, mở nắp cống xả nước đáy mương khi triều rút, ngưng tưới 2 ngày.`,
+        targetName: targetLabel,
+        tag: 'Thoát nước mo gốc',
+        severity: currentTreeMoisture > 80 ? 'high' : 'medium'
+      });
+    } else if (currentTreeMoisture < 50) {
+      actions.push({
+        step: actions.length + 1,
+        title: `Bổ sung tưới nước ẩm gốc (Độ ẩm ${Math.round(currentTreeMoisture)}%)`,
+        why: `Đất tại ${targetLabel} đang khô dưới ngưỡng tối ưu (cần 60-75%), cây dễ rụng hoa non hoặc teo đọt.`,
+        how: `Bật béc tưới phun sương từ 30-45 phút vào sáng sớm, phủ rơm rạ hoặc xác cỏ khô che giữ ẩm mặt mo.`,
+        targetName: targetLabel,
+        tag: 'Tưới nước bổ sung',
+        severity: 'medium'
+      });
+    }
+
+    // 4. Check Root temperature
+    if (currentTreeTemp > 33) {
+      actions.push({
+        step: actions.length + 1,
+        title: `Phủ cỏ mục / rơm rạ hạ nhiệt đất (Nhiệt độ ${currentTreeTemp.toFixed(1).replace('.', ',')}°C)`,
+        why: `Nhiệt độ tầng rễ đạt ${currentTreeTemp.toFixed(1).replace('.', ',')}°C khiến bộ rễ non sầu riêng dễ bị sốc nhiệt và ngưng hút nước.`,
+        how: `Phủ thảm cỏ mục hoặc rơm dày 5-7cm cách cổ rễ 20cm, tưới nước mát vào chiều dịu nắng.`,
+        targetName: targetLabel,
+        tag: 'Làm mát tầng rễ',
+        severity: 'medium'
+      });
+    }
+
+    // Default regular maintenance actions if soil is safe
+    if (actions.length === 0) {
+      actions.push({
+        step: 1,
+        title: `Duy trì độ ẩm và kiểm tra vi sinh định kỳ`,
+        why: `Các chỉ số đất tại ${targetLabel} đang đạt chuẩn an toàn (pH: ${currentTreePh.toFixed(1).replace('.', ',')}, EC: ${currentTreeEc.toFixed(2).replace('.', ',')}, Ẩm: ${Math.round(currentTreeMoisture)}%).`,
+        how: `Duy trì tưới giữ ẩm 60-70%, định kỳ bón phân hữu cơ vi sinh ủ hoai mục 3-5 kg/gốc để nuôi hệ vi sinh vật có lợi.`,
+        targetName: targetLabel,
+        tag: 'Duy trì tối ưu',
+        severity: 'normal'
+      });
+      actions.push({
+        step: 2,
+        title: `Bổ sung amino acid và humic nuôi dưỡng rễ tơ`,
+        why: `Bộ rễ đang trong trạng thái khỏe mạnh, thích hợp nhất để kích thích rễ tơ ăn sâu và tăng sinh khối quả.`,
+        how: `Tưới gốc chế phẩm Humic Acid kết hợp Fulvic định kỳ 15-20 ngày/lần dưới tán lá.`,
+        targetName: targetLabel,
+        tag: 'Dưỡng rễ định kỳ',
+        severity: 'normal'
+      });
+      actions.push({
+        step: 3,
+        title: `Kiểm tra rãnh mương và độ mặn nguồn nước trước khi bơm`,
+        why: `Phòng ngừa rủi ro nước sông nhiễm mặn đột xuất hoặc nghẽn dòng chảy thoát nước khi có triều cường.`,
+        how: `Dùng bút đo độ mặn nước sông trước mỗi cữ bơm vào mương vườn, chỉ lấy nước khi mặn dưới 0,5‰.`,
+        targetName: targetLabel,
+        tag: 'Phòng ngừa nguồn nước',
+        severity: 'normal'
+      });
+    }
+
+    // Ensure we provide at least up to 3 actions
+    if (actions.length === 1) {
+      actions.push({
+        step: 2,
+        title: `Theo dõi lại số đo cảm biến sau 24-48 giờ`,
+        why: `Cần kiểm chứng tốc độ phục hồi của đất tại ${targetLabel} sau khi tác động xử lý.`,
+        how: `Cắm que đo hoặc kiểm tra dữ liệu cảm biến hardware gửi về trên ứng dụng để xác nhận độ cải thiện.`,
+        targetName: targetLabel,
+        tag: 'Theo dõi chỉ số',
+        severity: 'normal'
+      });
+      actions.push({
+        step: 3,
+        title: `Xem chi tiết liều lượng phân bón tại tab Xử Lý`,
+        why: `Để có bảng tính phân bón và kế hoạch xử lý dài hạn theo đúng quy trình.`,
+        how: `Chuyển qua tab "Xử Lý" trên thanh điều hướng để xem máy tính vôi và công thức theo từng loại đất.`,
+        targetName: targetLabel,
+        tag: 'Kế hoạch chi tiết',
+        severity: 'normal'
+      });
+    } else if (actions.length === 2) {
+      actions.push({
+        step: 3,
+        title: `Xem công cụ tính vôi & phân giải độc tại tab Xử Lý`,
+        why: `Ứng dụng có sẵn công thức tính chính xác số kg vôi cần bón theo diện tích và loại đất của vườn.`,
+        how: `Chuyển qua tab "Xử Lý" để nhập thông số và nhận hướng dẫn chi tiết theo ngày.`,
+        targetName: targetLabel,
+        tag: 'Kế hoạch chi tiết',
+        severity: 'normal'
+      });
+    }
+
+    return actions.slice(0, 3);
+  }, [selectedTree, garden, currentTreePh, currentTreeEc, currentTreeMoisture, currentTreeTemp]);
+
   // Save current measurement for selected tree
   const handleSaveTreeMeasurement = () => {
     if (!selectedTree) return;
@@ -269,34 +482,16 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     setTimeout(() => setSaveNotice(null), 3000);
   };
 
-  // Re-read sensor from hardware ESP32
-  const handleTriggerProbeRead = () => {
+  // Refresh sensor readings from hardware ESP32 / Firebase
+  const handleSyncHardware = () => {
     setIsReadingSensor(true);
     if (onManualSync) onManualSync();
 
     setTimeout(() => {
       setIsReadingSensor(false);
-      if (selectedTree) {
-        // Apply slight realistic field probe calibration variance to tree
-        const variancePh = (Math.random() * 0.1 - 0.05);
-        const varianceEc = (Math.random() * 0.04 - 0.02);
-        const newPh = Number(Math.max(4.5, Math.min(7.5, garden.ph + variancePh)).toFixed(2));
-        const newEc = Number(Math.max(0.05, Math.min(3.0, garden.ec + varianceEc)).toFixed(2));
-
-        const updatedTree: TreeLocation = {
-          ...selectedTree,
-          lastPh: newPh,
-          lastEc: newEc,
-          lastMoisture: garden.moisture,
-          lastTemp: garden.temperature,
-          lastCrs: calculateCRS(newPh, newEc, garden.moisture, garden.temperature),
-          lastMeasuredAt: Date.now()
-        };
-
-        const updatedList = roomStorageService.addOrUpdateTreeLocation(updatedTree);
-        setTreeList(updatedList);
-      }
-    }, 800);
+      setSaveNotice('Đã cập nhật số đo mới nhất từ cảm biến phần cứng!');
+      setTimeout(() => setSaveNotice(null), 2500);
+    }, 600);
   };
 
   // Compute Tree Rows & Columns for 2D plot matrix
@@ -440,46 +635,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
       landmarkLocation: `Kế bên ${targetTree.name} (Hàng ${rowNum})`
     });
     setActiveModal('add_tree');
-  };
-
-  // Quick 1-click add adjacent tree without modal hassle
-  const handleQuickAddAdjacent = (rowNum: number, lastTreeInRow?: TreeLocation) => {
-    const treesInThisRow = treeList.filter(t => (t.row && t.row > 0 ? t.row : 1) === rowNum);
-    const nextCol = (lastTreeInRow?.col || treesInThisRow.length) + 1;
-    const treeNumber = treeList.length + 1;
-    const prevName = lastTreeInRow?.name || `Đầu liếp`;
-    const variety = lastTreeInRow?.variety || garden.crop || 'Sầu riêng Ri6';
-    const age = lastTreeInRow?.treeAge || garden.age || 10;
-    const name = `Cây #${treeNumber} (Hàng ${rowNum})`;
-
-    const newTree: TreeLocation = {
-      id: `tree-${garden.id}-${Date.now()}`,
-      gardenId: garden.id,
-      spotNumber: treeNumber,
-      row: rowNum,
-      col: nextCol,
-      name,
-      variety,
-      treeAge: age,
-      height: lastTreeInRow?.height || 7.0,
-      canopyWidth: lastTreeInRow?.canopyWidth || 6.0,
-      landmarkLocation: `Kế bên ${prevName} (Hàng ${rowNum})`,
-      notes: `Trồng kế bên ${prevName}`
-    };
-
-    const updated = roomStorageService.addOrUpdateTreeLocation(newTree);
-    roomStorageService.addConfigHistory({
-      type: 'tree',
-      action: 'create',
-      targetId: newTree.id,
-      targetName: newTree.name,
-      summary: `Thêm nhanh ${newTree.name} kế bên ${prevName} (Hàng ${rowNum}, Cột ${nextCol})`
-    });
-
-    setTreeList(updated);
-    setSelectedTreeId(newTree.id);
-    setSaveNotice(`Đã thêm ${newTree.name}! Ô thêm cây tiếp theo đã tự động sinh ra kế bên.`);
-    setTimeout(() => setSaveNotice(null), 3000);
   };
 
   // Open modal with prefilled direction context (fallback)
@@ -649,43 +804,77 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </button>
           </div>
 
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
-            {/* All garden main station pill */}
+          <div className="relative group">
+            {/* Left Scroll Arrow */}
             <button
-              onClick={() => setSelectedTreeId(null)}
-              className={`px-3 py-1.5 rounded-xl font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
-                selectedTreeId === null
-                  ? 'bg-emerald-700 text-white shadow-xs'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
-              }`}
+              onClick={() => {
+                if (overviewTreeCarouselRef.current) {
+                  overviewTreeCarouselRef.current.scrollBy({ left: -200, behavior: 'smooth' });
+                }
+              }}
+              className="absolute -left-2 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full bg-white/95 shadow-md border border-slate-200 text-slate-700 hover:text-slate-950 flex items-center justify-center cursor-pointer transition-all hover:scale-105"
+              aria-label="Cuộn trái"
+              title="Cuộn danh sách cây sang trái"
             >
-              <span>🌐</span>
-              <span>Toàn Vườn (Trung Tâm)</span>
+              <ChevronLeft className="w-3.5 h-3.5" />
             </button>
 
-            {/* Tree pills */}
-            {treeList.map((t, idx) => {
-              const isSel = t.id === selectedTreeId;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => setSelectedTreeId(t.id)}
-                  className={`px-3 py-1.5 rounded-xl font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
-                    isSel
-                      ? 'bg-amber-400 text-slate-950 shadow-xs ring-2 ring-amber-500'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
-                  }`}
-                >
-                  <span>🌳</span>
-                  <span>{t.name || `Cây #${idx + 1}`}</span>
-                  {t.lastCrs !== undefined && (
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${
-                      t.lastCrs >= 65 ? 'bg-red-500' : t.lastCrs >= 45 ? 'bg-amber-500' : 'bg-emerald-500'
-                    }`} />
-                  )}
-                </button>
-              );
-            })}
+            <div 
+              ref={overviewTreeCarouselRef}
+              className="flex items-center gap-1.5 overflow-x-auto py-1 px-1 text-xs select-none scroll-smooth"
+              style={{ scrollbarWidth: 'thin', scrollbarColor: '#2D7D46 #f1f5f9' }}
+            >
+              {/* All garden main station pill */}
+              <button
+                onClick={() => setSelectedTreeId(null)}
+                className={`px-3 py-1.5 rounded-xl font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
+                  selectedTreeId === null
+                    ? 'bg-emerald-700 text-white shadow-xs ring-2 ring-emerald-500'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                }`}
+              >
+                <span>🌐</span>
+                <span>Toàn Vườn (Trung Bình {gardenStats.totalTrees} Cây)</span>
+              </button>
+
+              {/* Tree pills */}
+              {treeList.map((t, idx) => {
+                const isSel = t.id === selectedTreeId;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setSelectedTreeId(t.id)}
+                    className={`px-3 py-1.5 rounded-xl font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
+                      isSel
+                        ? 'bg-amber-400 text-slate-950 shadow-xs ring-2 ring-amber-500'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200'
+                    }`}
+                  >
+                    <span>🌳</span>
+                    <span>{t.name || `Cây #${idx + 1}`}</span>
+                    {t.lastCrs !== undefined && (
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        t.lastCrs >= 65 ? 'bg-red-500' : t.lastCrs >= 45 ? 'bg-amber-500' : 'bg-emerald-500'
+                      }`} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Right Scroll Arrow */}
+            <button
+              onClick={() => {
+                if (overviewTreeCarouselRef.current) {
+                  overviewTreeCarouselRef.current.scrollBy({ left: 200, behavior: 'smooth' });
+                }
+              }}
+              className="absolute -right-2 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full bg-white/95 shadow-md border border-slate-200 text-slate-700 hover:text-slate-950 flex items-center justify-center cursor-pointer transition-all hover:scale-105"
+              aria-label="Cuộn phải"
+              title="Cuộn danh sách cây sang phải"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 
@@ -703,7 +892,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="text-[10px] font-black uppercase tracking-wider bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded shrink-0">
-                  Đang Đo Tại
+                  Cây Đang Chọn
                 </span>
                 <span className="font-black text-sm sm:text-base text-white truncate">
                   {selectedTree.name}
@@ -716,40 +905,75 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-3 sm:flex items-center gap-1.5 shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-emerald-700/60">
-            {/* Probe re-read button */}
-            <button
-              type="button"
-              onClick={handleTriggerProbeRead}
-              disabled={isReadingSensor}
-              className="py-2 px-2 bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer disabled:opacity-50 min-w-0"
-              title="Lấy số đo mới từ que đo cắm tại gốc này"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isReadingSensor ? 'animate-spin text-amber-300' : 'text-emerald-200'}`} />
-              <span className="truncate">{isReadingSensor ? 'Đang đọc...' : 'Đo lại que'}</span>
-            </button>
+          <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-emerald-700/60 self-end sm:self-auto">
+            {/* Sync Hardware Readings (from ESP32) */}
+            {onManualSync && (
+              <button
+                type="button"
+                onClick={handleSyncHardware}
+                disabled={isReadingSensor}
+                className="py-2 px-3 bg-emerald-800 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50 min-w-0"
+                title="Cập nhật số đo mới nhất từ cảm biến phần cứng ESP32"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isReadingSensor ? 'animate-spin text-amber-300' : 'text-emerald-200'}`} />
+                <span className="truncate">{isReadingSensor ? 'Đang nhận...' : 'Làm mới số đo'}</span>
+              </button>
+            )}
 
-            {/* Save measurement button */}
+            {/* Save hardware measurement button */}
             <button
               type="button"
               onClick={handleSaveTreeMeasurement}
-              className="py-2 px-2 bg-amber-400 hover:bg-amber-300 active:scale-95 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-1 transition-all shadow-xs cursor-pointer min-w-0"
-              title="Lưu số đo vào lịch sử của cây này"
+              className="py-2 px-3 bg-amber-400 hover:bg-amber-300 active:scale-95 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer min-w-0"
+              title="Lưu kết quả đo của cảm biến phần cứng vào lịch sử cây này"
             >
               <Save className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Lưu số đo</span>
+              <span className="truncate">Lưu số đo cảm biến</span>
             </button>
 
             {/* Deselect / Back to garden plot button */}
             <button
               type="button"
               onClick={() => setSelectedTreeId(null)}
-              className="py-2 px-2 bg-emerald-800 hover:bg-emerald-700 active:scale-95 text-emerald-200 hover:text-white rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 min-w-0"
+              className="py-2 px-2.5 bg-emerald-800 hover:bg-emerald-700 active:scale-95 text-emerald-200 hover:text-white rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 min-w-0 text-xs font-bold"
               title="Về điểm đo toàn vườn"
             >
               <X className="w-4 h-4 shrink-0" />
-              <span className="truncate">Toàn vườn</span>
+              <span className="truncate">Bỏ chọn</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 2B. WHOLE GARDEN AVERAGE BANNER (WHEN NO INDIVIDUAL TREE IS SELECTED) */}
+      {!selectedTree && (
+        <div className="bg-emerald-50 text-emerald-950 rounded-2xl p-3 sm:p-3.5 border-2 border-emerald-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 animate-in fade-in">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-2 bg-emerald-700 text-white rounded-xl font-black shrink-0">
+              <span className="text-lg leading-none">🌐</span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-700 text-white px-1.5 py-0.5 rounded shrink-0">
+                  Toàn Vườn (Trung Bình)
+                </span>
+                <span className="font-black text-sm sm:text-base text-slate-900 truncate">
+                  Trung Bình Cộng Của {gardenStats.totalTrees} Gốc Cây Trong Vườn
+                </span>
+              </div>
+              <p className="text-xs text-emerald-800 font-medium mt-0.5">
+                Các chỉ số dưới đây đại diện cho <strong>Trung bình cả vườn</strong> (pH dao động: <strong className="text-slate-900">{gardenStats.minPh.toFixed(1)}</strong> ➔ <strong className="text-slate-900">{gardenStats.maxPh.toFixed(1)}</strong>).
+                {gardenStats.maxPh - gardenStats.minPh >= 0.4 && (
+                  <span className="text-amber-900 font-bold ml-1">
+                    • Lưu ý: Cây chua nhất là <u>{gardenStats.lowestPhTreeName}</u> (pH {gardenStats.minPh.toFixed(1)}), hãy bấm chọn riêng cây để xử lý cục bộ!
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="text-[11px] font-bold text-emerald-900 bg-white px-3 py-1.5 rounded-xl border border-emerald-300 shrink-0 self-end sm:self-auto shadow-2xs">
+            💡 Bấm chọn từng cây để xem & xử lý riêng
           </div>
         </div>
       )}
@@ -859,7 +1083,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </span>
             <span className="text-[11px] font-bold text-slate-500 ml-1">pH</span>
           </div>
-          <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate">Chuẩn: 5,8 – 6,5</p>
+          <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate">
+            Chuẩn: 5,8 – 6,5 {selectedTree ? '' : `• TB ${gardenStats.totalTrees} cây`}
+          </p>
         </div>
 
         {/* Sensor 2: EC */}
@@ -882,7 +1108,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </span>
             <span className="text-[11px] font-bold text-slate-500 ml-1">dS/m</span>
           </div>
-          <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate">Chuẩn: &lt; 2,0 dS/m</p>
+          <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate">
+            Chuẩn: &lt; 2,0 dS/m {selectedTree ? '' : `• TB ${gardenStats.totalTrees} cây`}
+          </p>
         </div>
 
         {/* Sensor 3: Moisture */}
@@ -905,7 +1133,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </span>
             <span className="text-[11px] font-bold text-slate-500 ml-1">%</span>
           </div>
-          <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate">Chuẩn: 60% – 75%</p>
+          <p className="text-[10px] sm:text-[11px] font-bold text-slate-500 truncate">
+            Chuẩn: 60% – 75% {selectedTree ? '' : `• TB ${gardenStats.totalTrees} cây`}
+          </p>
         </div>
 
         {/* Sensor 4: Temperature */}
@@ -933,45 +1163,57 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 
       </div>
 
-      {/* THREE TODAY'S ACTION BUTTONS */}
+      {/* THREE TODAY'S ACTION BUTTONS - DYNAMIC ACCORDING TO GARDEN & TREE SENSORS */}
       <div className="space-y-1.5">
-        <h3 className="text-xs font-black uppercase text-slate-700 tracking-wider px-1">
-          Việc cần làm hôm nay:
-        </h3>
+        <div className="flex items-center justify-between px-1">
+          <h3 className="text-xs font-black uppercase text-slate-700 tracking-wider">
+            Việc cần xử lý hôm nay:
+          </h3>
+          <span className="text-[11px] font-bold text-slate-500">
+            Dựa trên: <strong className="text-emerald-800">{selectedTree ? selectedTree.name : `${garden.name} (Chung)`}</strong>
+          </span>
+        </div>
 
         <div className="space-y-2">
-          <button
-            onClick={() => setActiveModal('action_drain')}
-            className="w-full p-2.5 sm:p-3 bg-white hover:bg-emerald-50/60 active:scale-[0.99] border-2 border-slate-200 hover:border-[#2D7D46] rounded-2xl flex items-center justify-between gap-2 transition-all shadow-xs cursor-pointer min-w-0"
-          >
-            <div className="flex items-center gap-2.5 font-black text-slate-900 text-xs sm:text-sm min-w-0 flex-1 text-left">
-              <span className="w-6 h-6 rounded-xl bg-emerald-100 text-[#2D7D46] flex items-center justify-center text-xs font-black shrink-0">1</span>
-              <span className="break-words min-w-0 leading-snug">Kiểm tra rãnh thoát nước quanh mo gốc</span>
-            </div>
-            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
-          </button>
-
-          <button
-            onClick={() => setActiveModal('action_measure')}
-            className="w-full p-2.5 sm:p-3 bg-white hover:bg-emerald-50/60 active:scale-[0.99] border-2 border-slate-200 hover:border-[#2D7D46] rounded-2xl flex items-center justify-between gap-2 transition-all shadow-xs cursor-pointer min-w-0"
-          >
-            <div className="flex items-center gap-2.5 font-black text-slate-900 text-xs sm:text-sm min-w-0 flex-1 text-left">
-              <span className="w-6 h-6 rounded-xl bg-emerald-100 text-[#2D7D46] flex items-center justify-center text-xs font-black shrink-0">2</span>
-              <span className="break-words min-w-0 leading-snug">Đo lại đất tầng rễ sâu và nước tưới</span>
-            </div>
-            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
-          </button>
-
-          <button
-            onClick={() => setActiveModal('action_guide')}
-            className="w-full p-2.5 sm:p-3 bg-white hover:bg-emerald-50/60 active:scale-[0.99] border-2 border-slate-200 hover:border-[#2D7D46] rounded-2xl flex items-center justify-between gap-2 transition-all shadow-xs cursor-pointer min-w-0"
-          >
-            <div className="flex items-center gap-2.5 font-black text-slate-900 text-xs sm:text-sm min-w-0 flex-1 text-left">
-              <span className="w-6 h-6 rounded-xl bg-emerald-100 text-[#2D7D46] flex items-center justify-center text-xs font-black shrink-0">3</span>
-              <span className="break-words min-w-0 leading-snug">Hướng dẫn kỹ thuật bón vôi & phân hữu cơ giảm Cadimi</span>
-            </div>
-            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
-          </button>
+          {dynamicActions.map((act) => (
+            <button
+              key={act.step}
+              onClick={() => {
+                setActiveDynamicAction(act);
+                setActiveModal('action_dynamic');
+              }}
+              className="w-full p-2.5 sm:p-3 bg-white hover:bg-emerald-50/60 active:scale-[0.99] border-2 border-slate-200 hover:border-[#2D7D46] rounded-2xl flex items-center justify-between gap-2 transition-all shadow-xs cursor-pointer min-w-0"
+            >
+              <div className="flex items-center gap-2.5 font-black text-slate-900 text-xs sm:text-sm min-w-0 flex-1 text-left">
+                <span className={`w-6 h-6 rounded-xl flex items-center justify-center text-xs font-black shrink-0 ${
+                  act.severity === 'high' 
+                    ? 'bg-red-100 text-red-700' 
+                    : act.severity === 'medium' 
+                    ? 'bg-amber-100 text-amber-800' 
+                    : 'bg-emerald-100 text-[#2D7D46]'
+                }`}>
+                  {act.step}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <span className="break-words min-w-0 leading-snug block">
+                    {act.title}
+                  </span>
+                  {act.tag && (
+                    <span className={`inline-block mt-0.5 text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
+                      act.severity === 'high' 
+                        ? 'bg-red-50 text-red-600 border border-red-200' 
+                        : act.severity === 'medium'
+                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    }`}>
+                      {act.tag}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 shrink-0 ml-1" />
+            </button>
+          ))}
         </div>
       </div>
 
@@ -987,10 +1229,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </span>
             <div className="min-w-0">
               <h2 className="text-sm sm:text-base font-black text-slate-900 truncate">
-                Sơ Đồ Liếp Cây & Vị Trí Cắm Que Đo
+                Sơ Đồ Vườn Cây & Vị Trí Đo
               </h2>
               <p className="text-[11px] text-slate-500 font-semibold truncate">
-                Khuôn viên {gardenShapeLabel.toLowerCase()} ({gardenLength}m × {gardenWidth}m) • Chạm vào cây để đo
+                Khuôn viên {gardenShapeLabel.toLowerCase()} ({gardenLength}m × {gardenWidth}m) • Chạm vào cây để chọn và ghi nhận số đo
               </p>
             </div>
           </div>
@@ -1114,9 +1356,9 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                           >
                             {/* Selected Badge */}
                             {isSelected && (
-                              <div className="absolute top-0 right-0 bg-amber-400 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5">
+                              <div className="absolute top-0 right-0 bg-amber-400 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-xs">
                                 <Check className="w-2.5 h-2.5 stroke-[3]" />
-                                <span>Đang đo</span>
+                                <span>Đang chọn</span>
                               </div>
                             )}
 
@@ -1158,13 +1400,16 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setSelectedTreeId(tree.id);
-                                  handleTriggerProbeRead();
                                 }}
-                                className="flex-1 py-1 px-1 rounded-lg bg-emerald-800 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer min-w-0"
-                                title="Cắm que và đọc số đo ngay"
+                                className={`flex-1 py-1 px-1.5 rounded-lg font-bold text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer min-w-0 ${
+                                  isSelected
+                                    ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+                                    : 'bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100'
+                                }`}
+                                title="Chọn cây này để ghi nhận số đo cảm biến"
                               >
-                                <Zap className="w-3 h-3 text-amber-300 shrink-0" />
-                                <span className="truncate">Đo que</span>
+                                <TreeDeciduous className="w-3 h-3 shrink-0" />
+                                <span className="truncate">{isSelected ? 'Đang chọn' : 'Chọn cây'}</span>
                               </button>
 
                               <button
@@ -1173,11 +1418,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                   e.stopPropagation();
                                   handleAddNextToTree(tree);
                                 }}
-                                className="py-1 px-1.5 rounded-lg bg-emerald-700/60 hover:bg-emerald-600 active:scale-95 text-emerald-200 hover:text-white font-extrabold text-[10px] flex items-center justify-center gap-0.5 transition-all cursor-pointer shrink-0"
+                                className="py-1 px-2 rounded-lg bg-emerald-700/60 hover:bg-emerald-600 active:scale-95 text-emerald-100 hover:text-white font-extrabold text-[10px] flex items-center justify-center gap-0.5 transition-all cursor-pointer shrink-0"
                                 title="Thêm cây mới nằm kế bên cây này"
                               >
                                 <Plus className="w-3 h-3 stroke-[3] shrink-0" />
-                                <span>Kế bên</span>
+                                <span>+ Kế bên</span>
                               </button>
                             </div>
                           </div>
@@ -1187,43 +1432,30 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                       {/* "+ Thêm Cây Kế Tiếp" slot that fits in the grid */}
                       <div
                         onClick={() => handleAddAdjacentTree(rowGroup.rowNum, lastTreeInRow)}
-                        className="rounded-xl p-2 sm:p-2.5 border-2 border-dashed border-emerald-500/60 hover:border-amber-400 bg-emerald-950/40 hover:bg-emerald-900/60 transition-all flex flex-col justify-between gap-1.5 cursor-pointer group active:scale-[0.98] min-h-[105px]"
+                        className="rounded-xl p-2.5 border-2 border-dashed border-emerald-500/60 hover:border-amber-400 bg-emerald-950/40 hover:bg-emerald-900/60 transition-all flex flex-col justify-between gap-2 cursor-pointer group active:scale-[0.98] min-h-[105px]"
+                        title={`Thêm cây mới vào hàng ${rowGroup.rowNum}`}
                       >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <div className="w-6 h-6 rounded-lg bg-emerald-800/80 border border-emerald-600/50 flex items-center justify-center text-amber-300 group-hover:scale-110 transition-transform shrink-0">
-                            <Plus className="w-3.5 h-3.5 stroke-[3] shrink-0" />
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-7 h-7 rounded-lg bg-emerald-800/80 border border-emerald-600/50 flex items-center justify-center text-amber-300 group-hover:scale-110 transition-transform shrink-0">
+                            <Plus className="w-4 h-4 stroke-[3] shrink-0" />
                           </div>
                           <div className="min-w-0 flex-1">
                             <p className="font-extrabold text-xs text-emerald-100 group-hover:text-amber-300 truncate">
-                              + Thêm Kế Bên
+                              + Thêm Cây Mới
                             </p>
                             <p className="text-[10px] text-emerald-300/70 truncate">
-                              Cột #{nextColInRow}
+                              Hàng #{rowGroup.rowNum} • Cột #{nextColInRow}
                             </p>
                           </div>
                         </div>
 
                         <p className="text-[10px] text-emerald-300/80 font-medium line-clamp-1">
-                          {lastTreeInRow ? `Kế: ${lastTreeInRow.name}` : `Đầu hàng #${rowGroup.rowNum}`}
+                          {lastTreeInRow ? `Nằm kế: ${lastTreeInRow.name}` : `Cây đầu hàng #${rowGroup.rowNum}`}
                         </p>
 
-                        <div className="flex items-center justify-between gap-1 pt-1 border-t border-emerald-700/40">
-                          <span className="text-[10px] font-bold text-emerald-200 group-hover:text-white flex items-center gap-0.5 truncate">
-                            <span>Form</span>
-                            <ChevronRight className="w-3 h-3 shrink-0" />
-                          </span>
-
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleQuickAddAdjacent(rowGroup.rowNum, lastTreeInRow);
-                            }}
-                            className="px-2 py-0.5 rounded-md bg-amber-400 hover:bg-amber-300 active:scale-95 text-slate-950 font-black text-[9px] shrink-0 transition-all shadow-xs"
-                            title="Thêm nhanh 1 chạm"
-                          >
-                            ⚡ 1 Chạm
-                          </button>
+                        <div className="flex items-center justify-between gap-1 pt-1.5 border-t border-emerald-700/40 text-[11px] font-bold text-emerald-200 group-hover:text-amber-300">
+                          <span>Nhập thông tin cây</span>
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0 group-hover:translate-x-0.5 transition-transform" />
                         </div>
                       </div>
                     </div>
@@ -1338,6 +1570,14 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                     : 'bg-emerald-950/70 hover:bg-emerald-900/80 border-emerald-700/60'
                                 }`}
                               >
+                                {/* Selected Badge */}
+                                {isSelected && (
+                                  <div className="absolute top-0 right-0 bg-amber-400 text-slate-950 text-[9px] font-black px-1.5 py-0.5 rounded-bl-lg flex items-center gap-0.5 shadow-xs">
+                                    <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                    <span>Đang chọn</span>
+                                  </div>
+                                )}
+
                                 <div className="flex items-center gap-1.5 min-w-0">
                                   <span className="p-1 rounded-md bg-emerald-800 text-amber-300 shrink-0">
                                     <TreeDeciduous className="w-4 h-4 shrink-0" />
@@ -1361,12 +1601,16 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setSelectedTreeId(t.id);
-                                      handleTriggerProbeRead();
                                     }}
-                                    className="flex-1 py-1 px-1 rounded bg-emerald-800 text-white font-bold text-[10px] flex items-center justify-center gap-1"
+                                    className={`flex-1 py-1 px-1.5 rounded font-bold text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer min-w-0 ${
+                                      isSelected
+                                        ? 'bg-amber-400 text-slate-950 font-black shadow-xs'
+                                        : 'bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100'
+                                    }`}
+                                    title="Chọn cây này để ghi nhận số đo"
                                   >
-                                    <Zap className="w-3 h-3 text-amber-300" />
-                                    <span>Đo que</span>
+                                    <TreeDeciduous className="w-3 h-3 shrink-0" />
+                                    <span>{isSelected ? 'Đang chọn' : 'Chọn cây'}</span>
                                   </button>
                                   <button
                                     type="button"
@@ -1374,9 +1618,10 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                       e.stopPropagation();
                                       handleAddNextToTree(t);
                                     }}
-                                    className="py-1 px-1.5 rounded bg-emerald-700/60 text-emerald-200 text-[10px] font-bold"
+                                    className="py-1 px-2 rounded bg-emerald-700/60 hover:bg-emerald-600 text-emerald-100 text-[10px] font-bold shrink-0 transition-all cursor-pointer"
+                                    title="Thêm cây mới nằm kế bên"
                                   >
-                                    + Kế
+                                    + Kế bên
                                   </button>
                                 </div>
                               </div>
@@ -1386,25 +1631,22 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                           {/* Add tree card */}
                           <div
                             onClick={() => handleAddAdjacentTree(rowGroup.rowNum, lastTreeInRow)}
-                            className="w-[160px] shrink-0 rounded-xl p-2.5 border-2 border-dashed border-emerald-500/60 hover:border-amber-400 bg-emerald-950/40 hover:bg-emerald-900/60 transition-all flex flex-col justify-between gap-1.5 cursor-pointer group active:scale-98"
+                            className="w-[160px] shrink-0 rounded-xl p-2.5 border-2 border-dashed border-emerald-500/60 hover:border-amber-400 bg-emerald-950/40 hover:bg-emerald-900/60 transition-all flex flex-col justify-between gap-2 cursor-pointer group active:scale-98"
+                            title={`Thêm cây mới vào hàng ${rowGroup.rowNum}`}
                           >
                             <div className="flex items-center gap-1.5">
-                              <Plus className="w-4 h-4 text-amber-300 stroke-[3]" />
-                              <span className="text-xs font-bold text-emerald-100">+ Kế bên C#{nextColInRow}</span>
+                              <Plus className="w-4 h-4 text-amber-300 stroke-[3] shrink-0" />
+                              <span className="text-xs font-bold text-emerald-100 group-hover:text-amber-300 truncate">
+                                + Thêm Cây C#{nextColInRow}
+                              </span>
                             </div>
                             <p className="text-[10px] text-emerald-300/80 truncate">
-                              {lastTreeInRow ? `Kế: ${lastTreeInRow.name}` : `Đầu hàng`}
+                              {lastTreeInRow ? `Nằm kế: ${lastTreeInRow.name}` : `Đầu hàng`}
                             </p>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleQuickAddAdjacent(rowGroup.rowNum, lastTreeInRow);
-                              }}
-                              className="w-full py-1 bg-amber-400 text-slate-950 font-black text-[9px] rounded-md"
-                            >
-                              ⚡ 1 Chạm
-                            </button>
+                            <div className="flex items-center justify-between text-[10px] font-bold text-emerald-200 group-hover:text-amber-300 pt-1 border-t border-emerald-700/40">
+                              <span>Nhập thông tin cây</span>
+                              <ChevronRight className="w-3 h-3 shrink-0" />
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1668,6 +1910,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 {activeModal === 'action_drain' && '1. Kiểm Tra Rãnh Thoát Nước'}
                 {activeModal === 'action_measure' && '2. Đo Lại Đất & Nước Tưới'}
                 {activeModal === 'action_guide' && '3. Hướng Dẫn Xử Lý Đất'}
+                {activeModal === 'action_dynamic' && (activeDynamicAction ? `Bước ${activeDynamicAction.step}: Hướng Dẫn Xử Lý` : 'Chi Tiết Xử Lý')}
               </h3>
               <button
                 onClick={() => setActiveModal(null)}
@@ -1784,6 +2027,48 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                     Mở Tab Xử Lý Cụ Thể ➔
                   </button>
                 </>
+              )}
+
+              {/* Dynamic Action Modal */}
+              {activeModal === 'action_dynamic' && activeDynamicAction && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-800 block mb-1">
+                      Địa điểm & Đối tượng áp dụng
+                    </span>
+                    <p className="font-extrabold text-sm text-slate-900">
+                      📍 {activeDynamicAction.targetName}
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
+                    <p className="font-bold text-slate-900 text-xs sm:text-sm">
+                      1. Vì sao cần xử lý việc này?
+                    </p>
+                    <p className="text-xs text-slate-700 leading-relaxed">
+                      {activeDynamicAction.why}
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200 space-y-1">
+                    <p className="font-bold text-amber-950 text-xs sm:text-sm">
+                      2. Hướng dẫn kỹ thuật thực hiện:
+                    </p>
+                    <p className="text-xs text-amber-900 leading-relaxed font-medium">
+                      {activeDynamicAction.how}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setActiveModal(null);
+                      onNavigateToTab('remediation');
+                    }}
+                    className="w-full mt-2 py-2.5 bg-[#2D7D46] text-white font-bold rounded-xl text-xs hover:bg-emerald-700 transition-all cursor-pointer shadow-xs"
+                  >
+                    Chuyển sang Tab "Xử Lý" để theo dõi danh sách công việc ➔
+                  </button>
+                </div>
               )}
 
             </div>
