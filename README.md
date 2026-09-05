@@ -78,3 +78,8 @@ Muốn dùng mô hình GPT/Gemini trực tiếp, cần một máy chủ trung gi
 ## Ghi nhận phát triển
 
 Dự án được xác định yêu cầu và kiểm tra bởi chủ dự án; các cập nhật mã nguồn gần đây có sự hỗ trợ của Codex (GPT). Mọi kết quả khuyến nghị nông nghiệp vẫn cần được người dùng và cán bộ chuyên môn đối chiếu trước khi áp dụng.
+
+## Tác giả
+
+- Nguyễn Phúc Duy Thiên
+- Dương Hoàng Thiên Đăng

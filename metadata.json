@@ -1,6 +1,6 @@
 {
   "name": "CDGuard - Giám Sát Vườn Sầu Riêng",
-  "description": "Hệ thống giám sát nguy cơ Cadmium (CRS) cho vườn sầu riêng Đồng bằng sông Cửu Long",
+  "description": "Ứng dụng Android giám sát đất vườn sầu riêng: đo theo cây, Firebase realtime và trợ lý AI.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
