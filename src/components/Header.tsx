@@ -110,11 +110,11 @@ export const Header: React.FC<HeaderProps> = ({
           {syncStatus === 'syncing' && (
             <button
               onClick={onManualSync}
-              title="Đang đồng bộ dữ liệu với máy chủ Firebase..."
+              title="Xem bộ số đo mới nhất từ máy"
               className="px-2 py-1 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-400/40 flex items-center gap-1 animate-pulse hover:bg-blue-500/30 transition-all"
             >
               <RefreshCw className="w-3 h-3 text-blue-400 animate-spin" />
-              <span className="hidden xs:inline">Đang đồng bộ...</span>
+              <span>Realtime</span>
             </button>
           )}
 
@@ -125,19 +125,18 @@ export const Header: React.FC<HeaderProps> = ({
               className="px-2 py-1 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 hover:bg-emerald-500/30 hover:border-emerald-400 cursor-pointer transition-all"
             >
               <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-              <span className="hidden sm:inline">Đã cập nhật {formatLastSyncTime(lastSyncTime)}</span>
-              <span className="sm:hidden">Đã đọc Firebase</span>
+              <span>Realtime</span>
             </button>
           )}
 
           {syncStatus === 'disconnected' && (
             <button
               onClick={onManualSync}
-              title="Firebase chưa có số đo được gắn đúng tên cây của vườn này."
+              title="Bấm để xem số đo từ máy, không cần gán cây"
               className="px-2 py-1 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 hover:bg-amber-500/30 cursor-pointer transition-all"
             >
               <CloudOff className="w-3 h-3 text-amber-400" />
-              <span className="hidden xs:inline">Chưa gán cây</span>
+              <span>Realtime</span>
             </button>
           )}
 
@@ -148,7 +147,7 @@ export const Header: React.FC<HeaderProps> = ({
               className="px-2 py-1 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1 hover:bg-red-500/30 cursor-pointer transition-all"
             >
               <AlertTriangle className="w-3 h-3 text-red-400" />
-              <span className="hidden xs:inline">Lỗi - Bấm thử lại</span>
+              <span>Realtime</span>
             </button>
           )}
 

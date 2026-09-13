@@ -9,6 +9,7 @@ import {
   simulateHardwarePush,
   HardwareIncomingPayload
 } from '../services/firebaseService';
+import { IS_DEMO_MODE } from '../services/demoMode';
 import {
   Sparkles,
   TreePine,
@@ -191,6 +192,7 @@ export const LiveSurveyModal: React.FC<LiveSurveyModalProps> = ({
     status: 'IDLE' | 'MEASURING' | 'TREE_DONE' | 'GARDEN_DONE' = 'MEASURING',
     lastCmd: string = 'UPDATE'
   ) => {
+    if (IS_DEMO_MODE) return;
     pushSurveyStateToFirebase({
       garden_code: gCode,
       tree_num: tNum,
@@ -290,7 +292,7 @@ export const LiveSurveyModal: React.FC<LiveSurveyModalProps> = ({
   // REAL-TIME HARDWARE SUBSCRIPTION HOOK
   // Listens directly to Firebase Realtime Database for incoming ESP32 4G telemetry
   useEffect(() => {
-    if (!isOpen || viewStep !== 'survey') return;
+    if (IS_DEMO_MODE || !isOpen || viewStep !== 'survey') return;
 
     const unsubscribe = subscribeToHardwareStream((payload) => {
       handleIngestHardwareReading(payload);
@@ -301,7 +303,7 @@ export const LiveSurveyModal: React.FC<LiveSurveyModalProps> = ({
     };
   }, [isOpen, viewStep, handleIngestHardwareReading]);
 
-  // TRIGGER SIMULATION (For Testing Hardware Push to Firebase)
+  // Demo APK: create the same packet locally, without ESP32, SIM or Firebase.
   const handleTriggerSimulatedHardwarePush = async () => {
     if (isSimulatingHardware) return;
     setIsSimulatingHardware(true);
@@ -317,15 +319,21 @@ export const LiveSurveyModal: React.FC<LiveSurveyModalProps> = ({
       ec = Number((ec * 1.15).toFixed(2));
     }
 
-    await simulateHardwarePush({
+    const payload: HardwareIncomingPayload = {
+      deviceId: IS_DEMO_MODE ? 'CDGuard Demo' : 'esp32-01',
+      ts: Date.now(),
       ph,
       ec,
       moisture,
       temp,
-      tree_num: s.treeIndex,
-      spot_num: s.spotIndex,
+      n: Math.round(80 + Math.random() * 20),
+      p: Math.round(70 + Math.random() * 15),
+      k: Math.round(90 + Math.random() * 20),
       action: 'MEASURE_DONE'
-    });
+    };
+
+    if (IS_DEMO_MODE) handleIngestHardwareReading(payload);
+    else await simulateHardwarePush({ ...payload, tree_num: s.treeIndex, spot_num: s.spotIndex, action: 'MEASURE_DONE' });
 
     setTimeout(() => setIsSimulatingHardware(false), 800);
   };
@@ -803,8 +811,8 @@ export const LiveSurveyModal: React.FC<LiveSurveyModalProps> = ({
                   <Zap className="w-4 h-4 text-amber-300 animate-pulse" />
                   <span>
                     {isSimulatingHardware
-                      ? 'Đang phát gói tin ESP32 lên Firebase RTDB...'
-                      : `🧪 [MÔ PHỎNG PHẦN CỨNG] Bấm Nút Que Đo Điểm ${spotIndex} (Gốc ${String(treeIndex).padStart(2, '0')})`}
+                      ? IS_DEMO_MODE ? 'Đang tạo số đo demo...' : 'Đang phát gói tin ESP32 lên Firebase RTDB...'
+                      : IS_DEMO_MODE ? `🧪 TẠO SỐ ĐO DEMO · Điểm ${spotIndex} (Gốc ${String(treeIndex).padStart(2, '0')})` : `🧪 [MÔ PHỎNG PHẦN CỨNG] Bấm Nút Que Đo Điểm ${spotIndex} (Gốc ${String(treeIndex).padStart(2, '0')})`}
                   </span>
                 </button>
                 <p className="text-[10px] text-slate-400 text-center">

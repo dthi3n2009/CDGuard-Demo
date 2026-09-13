@@ -48,6 +48,7 @@ export const localStorageService = {
   saveGardens(gardens: Garden[]): void {
     try {
       localStorage.setItem(STORAGE_KEYS.GARDENS, JSON.stringify(gardens));
+      window.dispatchEvent(new Event('cdguard:gardens-changed'));
     } catch (e) {
       console.error('Error saving gardens to localStorage', e);
     }

@@ -1,69 +1,35 @@
 import { Garden, ChatMessage } from '../types';
 import { calculateCRS, getCRSInfo } from '../utils/crsCalculator';
 import { findBasicFaqAnswer } from '../data/basicFaq';
+import { askGemini } from './geminiService';
 
 export const MANDATORY_DISCLAIMER = "\n\n⚠️ Lưu ý: CDGuard chỉ đánh giá nguy cơ từ điều kiện đất, không thay thế kết quả xét nghiệm Cadmium tại phòng thí nghiệm.";
 
 /**
- * Sends prompt to Gemini AI via Express server endpoint /api/chat.
- * Falls back to intelligent rule-based answers if offline or missing API Key.
+ * Uses Firebase AI on Android; preserves local answers if AI is unavailable.
  */
 export async function sendChatMessage(
   message: string,
   history: ChatMessage[],
   garden: Garden
 ): Promise<string> {
+  if (!message.trim()) return 'Bạn nhập câu hỏi nhé.';
+  if (message.length > 2000) return 'Bạn rút gọn câu hỏi dưới 2.000 ký tự nhé.';
+  try {
+    const answer = await askGemini(message, history, garden);
+    if (answer) return answer + MANDATORY_DISCLAIMER;
+  } catch { /* Keep the offline knowledge available; never invent an AI response. */ }
+  return offlineChatMessage(message, garden);
+}
+
+export function offlineChatMessage(message: string, garden: Garden): string {
   const basicAnswer = findBasicFaqAnswer(message);
-  if (basicAnswer) return `**Trợ lý CDGuard:** ${basicAnswer}` + MANDATORY_DISCLAIMER;
+  if (basicAnswer) return `**Kiến thức có sẵn · chưa dùng Gemini:** ${basicAnswer}` + MANDATORY_DISCLAIMER;
 
   const crs = calculateCRS(garden.ph, garden.ec, garden.moisture, garden.temperature);
   const crsInfo = getCRSInfo(crs, garden.ph, garden.ec, garden.moisture, garden.temperature);
 
-  const gardenInfo = {
-    name: garden.name,
-    province: garden.province,
-    district: garden.district,
-    ward: garden.ward,
-    address: garden.address,
-    area: garden.area,
-    soilType: garden.soilType,
-    crop: garden.crop,
-    age: garden.age,
-    ph: garden.ph,
-    ec: garden.ec,
-    moisture: garden.moisture,
-    temperature: garden.temperature,
-    crs,
-    levelText: crsInfo.levelText
-  };
-
-  try {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message,
-        history,
-        gardenInfo
-      })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.text) {
-        let reply = data.text;
-        if (!reply.includes('CDGuard chỉ đánh giá nguy cơ')) {
-          reply += MANDATORY_DISCLAIMER;
-        }
-        return reply;
-      }
-    }
-  } catch (e) {
-    console.warn('Backend /api/chat unavailable, using rule-based engine:', e);
-  }
-
-  // Smart Rule-Based Engine Fallback
-  if (!garden.hasVerifiedReading) return 'Chưa kết nối được dịch vụ AI và chưa có số đo được xác minh của vườn. Mình chưa thể đánh giá tình trạng đất. Bạn hãy kết nối trạm đo hoặc cung cấp số đo thực tế để trao đổi tiếp.' + MANDATORY_DISCLAIMER;
+  if (!garden.hasVerifiedReading) return 'Chưa có số đo được xác minh của vườn. Mình chưa thể đánh giá tình trạng đất. Bạn có thể hỏi kiến thức có sẵn hoặc kết nối trạm đo để trao đổi theo số đo thực tế.' + MANDATORY_DISCLAIMER;
   return 'Chế độ ngoại tuyến: câu trả lời theo quy tắc có sẵn, không phải phản hồi từ Gemini.\n\n' + generateRuleBasedResponse(message, garden, crs, crsInfo);
 }
 

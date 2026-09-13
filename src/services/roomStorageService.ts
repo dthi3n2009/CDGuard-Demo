@@ -27,6 +27,8 @@ export interface TreeLocation {
 }
 
 export interface DetailedMeasurement {
+  deviceId?: string;
+  savedAt?: number;
   id: string;
   gardenId: string;
   spotId: string;
@@ -221,6 +223,7 @@ export const roomStorageService = {
       localStorage.setItem(ROOM_KEYS.MEASUREMENTS, JSON.stringify(records));
     } catch (e) {
       console.error('[Room DB] Error saving measurements:', e);
+      throw e;
     }
   },
 

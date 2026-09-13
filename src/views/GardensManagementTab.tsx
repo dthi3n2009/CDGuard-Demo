@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Garden, ConfigHistoryItem } from '../types';
 import { roomStorageService, TreeLocation } from '../services/roomStorageService';
 import { VietnamAddressFields, isValidGardenAddress } from '../components/VietnamAddressFields';
+import { SurveyPlanner } from '../components/SurveyPlanner';
 import {
   Trees,
   Plus,
@@ -326,6 +327,7 @@ export const GardensManagementTab: React.FC<GardensManagementTabProps> = ({
 
   return (
     <div className="space-y-4 pb-20 max-w-4xl mx-auto w-full">
+      {gardens.some(g => g.id === activeGarden.id) && <SurveyPlanner key={activeGarden.id} garden={gardens.find(g => g.id === activeGarden.id)!} />}
       
       {/* 1. Sub-tab Navigation */}
       <div className="bg-white rounded-2xl p-2.5 sm:p-3 shadow-sm border border-slate-200 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">

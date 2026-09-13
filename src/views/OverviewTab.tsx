@@ -2,6 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Garden, SyncStatusState } from '../types';
 import { calculateCRS, getCRSInfo } from '../utils/crsCalculator';
 import { roomStorageService, TreeLocation, DetailedMeasurement } from '../services/roomStorageService';
+import { retryPendingTreeMeasurements } from '../services/treeMeasurementService';
+import { saveIncomingReadingForSession, TreeMeasurementSession } from '../services/autoTreeMeasurement';
+import { subscribeToGardenRealtime } from '../services/firebaseService';
 import { 
   ShieldAlert, 
   AlertTriangle, 
@@ -42,7 +45,7 @@ interface OverviewTabProps {
   onOpenLiveSurvey?: () => void;
   syncStatus?: SyncStatusState;
   lastSyncTime?: number;
-  onManualSync?: () => void;
+  onManualSync?: (treeId?: string) => void;
 }
 
 type ModalType =
@@ -71,6 +74,16 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
 }) => {
   // Tree selection state - null on initial load as per user requirement
   const [selectedTreeId, setSelectedTreeId] = useState<string | null>(null);
+  const [measurementSession, setMeasurementSession] = useState<TreeMeasurementSession | null>(null);
+  const committingMeasurementRef = useRef(false);
+  const [savingMeasurement, setSavingMeasurement] = useState(false);
+  useEffect(() => {
+    const retry = () => { void retryPendingTreeMeasurements(); };
+    retry();
+    window.addEventListener('online', retry);
+    const timer = window.setInterval(retry, 30000);
+    return () => { window.removeEventListener('online', retry); window.clearInterval(timer); };
+  }, []);
   const [treeList, setTreeList] = useState<TreeLocation[]>([]);
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [activeDynamicAction, setActiveDynamicAction] = useState<{
@@ -83,7 +96,6 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   
   // Quick notice states
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
-  const [isReadingSensor, setIsReadingSensor] = useState<boolean>(false);
 
   // Quick tree creation form state
   const [addTreeDirection, setAddTreeDirection] = useState<'right' | 'below' | 'general'>('general');
@@ -130,6 +142,8 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     };
     refresh();
     setSelectedTreeId(null);
+    setMeasurementSession(null);
+    setSavingMeasurement(false);
     return roomStorageService.subscribeTreeLocations(refresh);
   }, [garden.id]);
 
@@ -186,6 +200,39 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
   const selectedTree = useMemo(() => {
     return treeList.find(t => t.id === selectedTreeId) || null;
   }, [treeList, selectedTreeId]);
+
+  // This only accepts the first sensor record created after the user started this tree's session.
+  useEffect(() => {
+    if (!measurementSession) return;
+    let active = true;
+    const unsubscribe = subscribeToGardenRealtime((state) => {
+      const data = state.reading.data;
+      if (!active || committingMeasurementRef.current || !state.reading.success || !data ||
+          data.deviceId !== garden.deviceId || data.ts < measurementSession.startedAt) return;
+      const target = roomStorageService.getTreeLocations(garden.id).find(tree => tree.id === measurementSession.treeId);
+      if (!target) {
+        setMeasurementSession(null);
+        setSavingMeasurement(false);
+        setSaveNotice('Cây đã bị xóa nên không thể lưu lần đo này.');
+        return;
+      }
+      committingMeasurementRef.current = true;
+      void saveIncomingReadingForSession(garden, target, measurementSession, state.reading)
+        .then(({ synced }) => {
+          if (!active) return;
+          setSaveNotice(synced
+            ? `Đã tự lưu ${target.name} · Đã đồng bộ lịch sử lên Firebase.`
+            : `Đã tự lưu ${target.name} trên thiết bị · Sẽ tự đồng bộ khi có mạng.`);
+          setMeasurementSession(null);
+          setSavingMeasurement(false);
+        })
+        .catch((error: Error) => {
+          if (active) setSaveNotice(`Chưa lưu: ${error.message}`);
+        })
+        .finally(() => { committingMeasurementRef.current = false; });
+    });
+    return () => { active = false; unsubscribe(); };
+  }, [measurementSession, garden]);
 
   // Values for the selected view:
   // When selectedTree is null -> "Toàn Vườn" uses actual Garden Average of all trees!
@@ -416,63 +463,22 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     return actions.slice(0, 3);
   }, [selectedTree, garden, currentTreePh, currentTreeEc, currentTreeMoisture, currentTreeTemp]);
 
-  // Save current measurement for selected tree
+  // Arm a single-use session. The next new ESP32 packet is saved automatically.
   const handleSaveTreeMeasurement = () => {
-    if (!selectedTree) return;
-
-    const now = Date.now();
-    const dateObj = new Date(now);
-    const hour = dateObj.getHours();
-    const sessionName = hour < 11 ? 'Sáng' : hour < 15 ? 'Trưa' : hour < 18 ? 'Chiều' : 'Khác';
-
-    const newRecord: DetailedMeasurement = {
-      id: 'meas-' + now,
-      gardenId: garden.id,
-      spotId: selectedTree.id,
-      locationName: selectedTree.name,
-      timestamp: now,
-      dayStr: dateObj.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }),
-      timeStr: dateObj.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-      sessionName,
-      ph: currentTreePh,
-      ec: currentTreeEc,
-      moisture: currentTreeMoisture,
-      temperature: currentTreeTemp,
-      crs: crsScore,
-      syncedToCloud: true,
-      notes: `Đo thực địa tại ${selectedTree.name} (${selectedTree.variety})`
-    };
-
-    roomStorageService.addMeasurement(newRecord);
-
-    // Update tree location with these latest readings
-    const updatedTree: TreeLocation = {
-      ...selectedTree,
-      lastPh: currentTreePh,
-      lastEc: currentTreeEc,
-      lastMoisture: currentTreeMoisture,
-      lastTemp: currentTreeTemp,
-      lastCrs: crsScore,
-      lastMeasuredAt: now
-    };
-
-    const updatedList = roomStorageService.addOrUpdateTreeLocation(updatedTree);
-    setTreeList(updatedList);
-
-    setSaveNotice(`Đã lưu kết quả đo cho ${selectedTree.name}!`);
-    setTimeout(() => setSaveNotice(null), 3000);
+    if (!selectedTree || measurementSession) return;
+    const startedAt = Date.now();
+    setMeasurementSession({ gardenId: garden.id, treeId: selectedTree.id, startedAt });
+    setSavingMeasurement(true);
+    setSaveNotice(`Đang chờ số đo mới cho ${selectedTree.name}. Bây giờ bấm nút trên máy.`);
   };
 
-  // Refresh sensor readings from hardware ESP32 / Firebase
-  const handleSyncHardware = () => {
-    setIsReadingSensor(true);
-    if (onManualSync) onManualSync();
-
-    setTimeout(() => {
-      setIsReadingSensor(false);
-      setSaveNotice('Đã kiểm tra Firebase. Chỉ nhận số đo khi bản ghi được gắn đúng tên cây.');
-      setTimeout(() => setSaveNotice(null), 2500);
-    }, 600);
+  const selectTreeForMeasurement = (treeId: string | null) => {
+    if (measurementSession) {
+      setMeasurementSession(null);
+      setSavingMeasurement(false);
+      setSaveNotice('Đã hủy phiên đo trước khi đổi cây.');
+    }
+    setSelectedTreeId(treeId);
   };
 
   // Compute Tree Rows & Columns for 2D plot matrix
@@ -662,7 +668,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
     });
 
     setTreeList(updated);
-    setSelectedTreeId(newTree.id); // Automatically select newly created tree to measure!
+    selectTreeForMeasurement(newTree.id); // Automatically select newly created tree to measure!
     
     if (continueNext) {
       // Continue next: immediately generate and prefill next adjacent slot
@@ -763,9 +769,11 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
         <h2 className="font-extrabold text-slate-900">{selectedTree.name} chưa có số đo</h2>
         <p className="text-sm text-slate-600">Cây này vừa được thêm vào. Chưa có dữ liệu cảm biến hoặc số đo thực địa nên app chưa tính pH, CRS hay đưa cảnh báo.</p>
         <div className="flex justify-center gap-2">
-          <button onClick={() => setSelectedTreeId(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm">Xem toàn vườn</button>
-          {onOpenLiveSurvey && <button onClick={onOpenLiveSurvey} className="px-4 py-2 bg-emerald-700 text-white rounded-xl font-bold text-sm">Ghi số đo đầu tiên</button>}
+          <button onClick={() => selectTreeForMeasurement(null)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm">Xem toàn vườn</button>
+          <button disabled={savingMeasurement} onClick={handleSaveTreeMeasurement} className="px-4 py-2 bg-emerald-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">{savingMeasurement ? 'Chờ máy đo…' : 'Bắt đầu đo cây này'}</button>
         </div>
+        <p className="text-xs text-slate-600">Bấm bắt đầu → bấm nút trên máy. Bản ghi mới kế tiếp sẽ tự lưu vào đúng cây này.</p>
+        {saveNotice && <p role="status" className="text-sm text-emerald-800">{saveNotice}</p>}
       </div>
     );
   }
@@ -872,7 +880,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             >
               {/* All garden main station pill */}
               <button
-                onClick={() => setSelectedTreeId(null)}
+                onClick={() => selectTreeForMeasurement(null)}
                 className={`px-3 py-1.5 rounded-xl font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
                   selectedTreeId === null
                     ? 'bg-emerald-700 text-white shadow-xs ring-2 ring-emerald-500'
@@ -889,7 +897,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                 return (
                   <button
                     key={t.id}
-                    onClick={() => setSelectedTreeId(t.id)}
+                    onClick={() => selectTreeForMeasurement(t.id)}
                     className={`px-3 py-1.5 rounded-xl font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer ${
                       isSel
                         ? 'bg-amber-400 text-slate-950 shadow-xs ring-2 ring-amber-500'
@@ -952,35 +960,22 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </div>
 
           <div className="flex items-center gap-2 shrink-0 pt-1 sm:pt-0 border-t sm:border-t-0 border-emerald-700/60 self-end sm:self-auto">
-            {/* Sync Hardware Readings (from ESP32) */}
-            {onManualSync && (
-              <button
-                type="button"
-                onClick={handleSyncHardware}
-                disabled={isReadingSensor}
-                className="py-2 px-3 bg-emerald-800 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50 min-w-0"
-                title="Cập nhật số đo mới nhất từ cảm biến phần cứng ESP32"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isReadingSensor ? 'animate-spin text-amber-300' : 'text-emerald-200'}`} />
-                <span className="truncate">{isReadingSensor ? 'Đang nhận...' : 'Làm mới số đo'}</span>
-              </button>
-            )}
-
             {/* Save hardware measurement button */}
             <button
               type="button"
               onClick={handleSaveTreeMeasurement}
+              disabled={savingMeasurement}
               className="py-2 px-3 bg-amber-400 hover:bg-amber-300 active:scale-95 text-slate-950 font-black text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all shadow-xs cursor-pointer min-w-0"
               title="Lưu kết quả đo của cảm biến phần cứng vào lịch sử cây này"
             >
               <Save className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Lưu số đo cảm biến</span>
+              <span className="truncate">{savingMeasurement ? 'Chờ máy đo…' : 'Bắt đầu đo'}</span>
             </button>
 
             {/* Deselect / Back to garden plot button */}
             <button
               type="button"
-              onClick={() => setSelectedTreeId(null)}
+              onClick={() => selectTreeForMeasurement(null)}
               className="py-2 px-2.5 bg-emerald-800 hover:bg-emerald-700 active:scale-95 text-emerald-200 hover:text-white rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1 min-w-0 text-xs font-bold"
               title="Về điểm đo toàn vườn"
             >
@@ -1084,7 +1079,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
             </span>
             <span className="text-emerald-400 font-bold">•</span>
             <span className="text-emerald-200 font-semibold truncate">
-              {syncStatus === 'syncing' ? 'Đang nhận gói tin cảm biến...' : 'Trạm đo Realtime kết nối ổn định'}
+              {savingMeasurement ? 'Đang chờ máy gửi số đo mới…' : selectedTree ? 'Số đo đã lưu của cây' : 'Tổng hợp số đo trong vườn'}
             </span>
           </div>
         </div>
@@ -1095,7 +1090,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
           </span>
           {onManualSync && (
             <button
-              onClick={onManualSync}
+              onClick={() => onManualSync?.(selectedTreeId || undefined)}
               title="Đồng bộ lại dữ liệu"
               className="px-2 py-0.5 bg-emerald-700/80 hover:bg-emerald-600 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer"
             >
@@ -1393,7 +1388,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                         return (
                           <div
                             key={tree.id}
-                            onClick={() => setSelectedTreeId(tree.id)}
+                            onClick={() => selectTreeForMeasurement(tree.id)}
                             className={`rounded-xl p-2 sm:p-2.5 border-2 transition-all flex flex-col justify-between gap-1.5 cursor-pointer relative overflow-hidden active:scale-[0.98] ${
                               isSelected
                                 ? 'bg-amber-400/20 border-amber-400 ring-2 ring-amber-400 shadow-md'
@@ -1445,7 +1440,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSelectedTreeId(tree.id);
+                                  selectTreeForMeasurement(tree.id);
                                 }}
                                 className={`flex-1 py-1 px-1.5 rounded-lg font-bold text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer min-w-0 ${
                                   isSelected
@@ -1609,7 +1604,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                             return (
                               <div
                                 key={t.id}
-                                onClick={() => setSelectedTreeId(t.id)}
+                                onClick={() => selectTreeForMeasurement(t.id)}
                                 className={`w-[170px] shrink-0 rounded-xl p-2.5 border-2 transition-all flex flex-col justify-between gap-1.5 cursor-pointer relative overflow-hidden active:scale-[0.98] ${
                                   isSelected
                                     ? 'bg-amber-400/20 border-amber-400 ring-2 ring-amber-400 shadow-md'
@@ -1646,7 +1641,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSelectedTreeId(t.id);
+                                      selectTreeForMeasurement(t.id);
                                     }}
                                     className={`flex-1 py-1 px-1.5 rounded font-bold text-[10px] flex items-center justify-center gap-1 transition-all cursor-pointer min-w-0 ${
                                       isSelected

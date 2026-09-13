@@ -20,13 +20,21 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
   const [toastNotice, setToastNotice] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const requestVersion = useRef(0);
+  const sending = useRef(false);
+  const sessionHistory = useRef<ChatMessage[]>([]);
 
 
   const archivedSessions = localStorageService.getArchivedSessions();
 
   useEffect(() => {
+    requestVersion.current++;
+    sessionHistory.current = [];
+    sending.current = false;
+    setLoading(false);
     // Preserve real conversations, but do not revive old generated welcome messages.
     setMessages(localStorageService.getChatHistory().filter(message => !message.id.startsWith('init-msg')));
+    return () => { requestVersion.current++; };
   }, [garden.id]);
 
   useEffect(() => {
@@ -35,7 +43,9 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
 
   const handleSend = async (queryText?: string) => {
     const textToSend = queryText || input.trim();
-    if (!textToSend || loading) return;
+    if (!textToSend || sending.current) return;
+    sending.current = true;
+    const version = ++requestVersion.current;
 
     const userMsg: ChatMessage = {
       id: 'usr-' + Date.now(),
@@ -50,7 +60,9 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
     setLoading(true);
 
     try {
-      const reply = await sendChatMessage(textToSend, newHistory, garden);
+      // Only send this garden's current session, not globally stored older chats.
+      const reply = await sendChatMessage(textToSend, sessionHistory.current, garden);
+      if (version !== requestVersion.current) return;
       const botMsg: ChatMessage = {
         id: 'bot-' + Date.now(),
         sender: 'assistant',
@@ -59,12 +71,16 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
       };
 
       const updated = [...newHistory, botMsg];
+      sessionHistory.current = [...sessionHistory.current, userMsg, botMsg].slice(-6);
       setMessages(updated);
       localStorageService.saveChatHistory(updated);
     } catch (e) {
       console.error('Chat error:', e);
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) {
+        sending.current = false;
+        setLoading(false);
+      }
     }
   };
 
@@ -75,6 +91,10 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
 
     const saved = localStorageService.archiveCurrentChatSession(messages, garden.name);
     if (saved) {
+      requestVersion.current++;
+      sessionHistory.current = [];
+      sending.current = false;
+      setLoading(false);
       setMessages([]);
       localStorageService.saveChatHistory([]);
 
@@ -84,6 +104,10 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
   };
 
   const handleDirectClearWithoutArchive = () => {
+    requestVersion.current++;
+    sessionHistory.current = [];
+    sending.current = false;
+    setLoading(false);
     setMessages([]);
     localStorageService.saveChatHistory([]);
     setShowClearConfirmModal(false);
@@ -129,7 +153,7 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
                 </h2>
               </div>
               <p className="text-[10px] text-slate-500 font-medium truncate">
-                Vườn: {garden.name} · 100 câu hỏi–đáp cơ bản
+                Vườn: {garden.name} · Gemini / kiến thức có sẵn
               </p>
             </div>
           </div>
@@ -173,6 +197,7 @@ export const AIAssistantTab: React.FC<AIAssistantTabProps> = ({ garden }) => {
             <h3 className="font-bold text-slate-900">Bạn muốn trao đổi điều gì?</h3>
             <p>Nhập câu hỏi về vườn hoặc chọn một câu hỏi gợi ý bên dưới. Trợ lý chỉ trả lời sau khi bạn gửi câu hỏi.</p>
             <p>Hãy cho biết triệu chứng và số đo thực tế nếu có. Chưa có số đo thì không thể kết luận tình trạng đất.</p>
+            <p>Câu hỏi và số đo cần thiết được gửi tới Gemini khi có kết nối. Không nhập mật khẩu hay thông tin riêng tư. Đây là AI tham khảo, chưa phải mô hình được huấn luyện riêng cho CDGuard.</p>
           </div>
         )}
         {messages.map((msg, idx) => {

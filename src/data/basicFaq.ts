@@ -37,6 +37,8 @@ export const BASIC_FAQ_QUESTIONS = BASIC_FAQ_PAIRS.map(pair => pair.question);
 
 export function findBasicFaqAnswer(question: string): string | null {
   const normalized = question.toLocaleLowerCase('vi-VN');
+  const exact = BASIC_FAQ_PAIRS.find(pair => pair.question.toLocaleLowerCase('vi-VN') === normalized.trim());
+  if (exact) return exact.answer;
   const match = BASIC_FAQ_PAIRS
     .map(pair => ({
       pair,

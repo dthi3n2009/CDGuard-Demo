@@ -1,5 +1,5 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, User as FirebaseUser } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, signInAnonymously, User as FirebaseUser } from 'firebase/auth';
 import { SensorReading } from '../types';
 import { isReadingFresh } from './deviceStatus';
 import { Capacitor } from '@capacitor/core';
@@ -16,6 +16,50 @@ const DEFAULT_FIREBASE_CONFIG = {
   messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
   appId: metaEnv.VITE_FIREBASE_APP_ID || ''
 };
+
+export const measurementDatabaseUrl = DEFAULT_FIREBASE_CONFIG.databaseURL;
+
+let guestLogin: Promise<string> | null = null;
+export function ensureFirebaseIdentity(): Promise<string> {
+  if (guestLogin) return guestLogin;
+  guestLogin = (async () => {
+    if (Capacitor.isNativePlatform()) {
+      if (!Capacitor.isPluginAvailable('FirebaseAuthentication')) throw new Error('Bản cài thiếu Firebase Authentication.');
+      const current = await FirebaseAuthentication.getCurrentUser();
+      const user = current.user || (await FirebaseAuthentication.signInAnonymously()).user;
+      if (!user) throw new Error('Không tạo được phiên khách Firebase.');
+      return user.uid;
+    }
+    const app = getFirebaseApp();
+    if (!app || !DEFAULT_FIREBASE_CONFIG.apiKey) throw new Error('Thiếu cấu hình Firebase cho bản web.');
+    const auth = getAuth(app);
+    await auth.authStateReady();
+    return (auth.currentUser || (await signInAnonymously(auth)).user).uid;
+  })().finally(() => { guestLogin = null; });
+  return guestLogin;
+}
+
+export function cloudErrorMessage(error: unknown): string {
+  const message = String((error as any)?.message || error);
+  if (/configuration.not.found|operation.not.allowed|admin.restricted.operation/i.test(message)) {
+    return 'Firebase chưa cho phép đăng nhập khách. Cần bật Authentication → Anonymous trong dự án CDGuard.';
+  }
+  return 'Chưa đồng bộ Firebase. Dữ liệu vẫn ở trên máy; kiểm tra mạng và quyền truy cập Firebase.';
+}
+
+export async function authenticatedDatabaseUrl(url: string): Promise<string> {
+  let token: string | undefined;
+  try {
+    if (Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('FirebaseAuthentication')) {
+      const current = await FirebaseAuthentication.getCurrentUser();
+      if (current.user) token = (await FirebaseAuthentication.getIdToken()).token;
+    } else if (DEFAULT_FIREBASE_CONFIG.apiKey) {
+      const app = getFirebaseApp();
+      if (app) token = await getAuth(app).currentUser?.getIdToken();
+    }
+  } catch { /* The caller reports pending sync if access is denied. */ }
+  return token ? `${url}${url.includes('?') ? '&' : '?'}auth=${encodeURIComponent(token)}` : url;
+}
 
 let firebaseApp: FirebaseApp | null = null;
 
@@ -92,6 +136,8 @@ export interface FirebaseReadingResult {
   data?: {
     deviceId: string;
     treeName?: string;
+    gardenId?: string;
+    treeId?: string;
     ph: number;
     ec: number; // dS/m
     moisture: number;
@@ -207,7 +253,7 @@ export async function fetchLatestFirebaseReading(
     let json: any = null;
 
     try {
-      response = await fetch(`${cleanUrl}/data.json?orderBy="$key"&limitToLast=1`, {
+      response = await fetch(await authenticatedDatabaseUrl(`${cleanUrl}/data.json?orderBy="$key"&limitToLast=1`), {
         signal: controller.signal,
         headers: { 'Accept': 'application/json' }
       });
@@ -221,7 +267,7 @@ export async function fetchLatestFirebaseReading(
     // Fallback: If orderBy fails (e.g. indexing rule), try reading /latest.json
     if (!json || typeof json !== 'object' || Object.keys(json).length === 0) {
       try {
-        const latestResp = await fetch(`${cleanUrl}/latest.json`, {
+        const latestResp = await fetch(await authenticatedDatabaseUrl(`${cleanUrl}/latest.json`), {
           signal: controller.signal,
           headers: { 'Accept': 'application/json' }
         });
@@ -317,6 +363,8 @@ export function parseRecordToReading(record: any): FirebaseReadingResult {
     data: {
       deviceId,
       treeName: record.tree_name || record.location,
+      gardenId: record.garden_id || record.gardenId,
+      treeId: record.tree_id || record.treeId,
       ph: typeof values.ph === 'number' ? parseFloat(values.ph.toFixed(2)) : 5.49,
       ec: Number(ecDsm.toFixed(3)),
       moisture: values.moisture,

@@ -22,6 +22,9 @@ import { DeviceTab } from './views/DeviceTab';
 import { ConsultationHistoryModal } from './components/ConsultationHistoryModal';
 import { LiveSurveyModal } from './components/LiveSurveyModal';
 import { Toast } from './components/Toast';
+import { GuestCloudStatus } from './components/GuestCloudStatus';
+import { RealtimeReadingModal } from './components/RealtimeReadingModal';
+import { IS_DEMO_MODE } from './services/demoMode';
 
 export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(() => {
@@ -63,6 +66,9 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState<boolean>(() => !localStorageService.getSettings().onboardingCompleted);
   const [showGlobalHistoryModal, setShowGlobalHistoryModal] = useState<boolean>(false);
   const [showLiveSurveyModal, setShowLiveSurveyModal] = useState<boolean>(false);
+  const [showRealtime, setShowRealtime] = useState(false);
+  const [realtimeTreeId, setRealtimeTreeId] = useState<string | undefined>();
+  useEffect(() => { setShowRealtime(false); }, [currentGardenId]);
   const [toast, setToast] = useState<{ message: string; type: 'info' | 'warning' | 'danger' | 'success' } | null>(null);
 
   // Real-time synchronization states
@@ -111,6 +117,12 @@ export default function App() {
 
   // Manual Trigger: Immediate Sync with Firebase
   const handleManualSync = useCallback(async () => {
+    if (IS_DEMO_MODE) {
+      setSyncStatus('updated');
+      setLastSyncTime(Date.now());
+      setToast({ message: 'Chế độ demo: hãy bấm Realtime hoặc Khảo sát để tạo số đo mới.', type: 'info' });
+      return;
+    }
     setSyncStatus('syncing');
     try {
       const res = await fetchLatestFirebaseReading();
@@ -150,7 +162,7 @@ export default function App() {
 
   // Active Real-time Firebase RTDB Stream + Continuous Polling Fallback
   useEffect(() => {
-    if (!userProfile || gardens.length === 0 || showOnboarding) return;
+    if (IS_DEMO_MODE || !userProfile || gardens.length === 0 || showOnboarding) return;
 
     const unsubscribe = subscribeToGardenRealtime((state) => {
       setLastSyncTime(state.lastSyncTime);
@@ -316,10 +328,11 @@ export default function App() {
         onOpenConsultationHistory={() => setShowGlobalHistoryModal(true)}
         syncStatus={syncStatus}
         lastSyncTime={lastSyncTime}
-        onManualSync={handleManualSync}
+        onManualSync={() => { setRealtimeTreeId(undefined); setShowRealtime(true); }}
       />
 
       {/* Main Content Area */}
+      <GuestCloudStatus />
       <main className={
         activeTab === 'ai_assistant'
           ? 'flex-1 min-h-0 p-2 sm:p-3 pb-16 max-w-4xl mx-auto w-full flex flex-col overflow-hidden'
@@ -337,7 +350,7 @@ export default function App() {
             onOpenLiveSurvey={() => setShowLiveSurveyModal(true)}
             syncStatus={syncStatus}
             lastSyncTime={lastSyncTime}
-            onManualSync={handleManualSync}
+            onManualSync={(treeId) => { setRealtimeTreeId(treeId); setShowRealtime(true); }}
           />
         )}
 
@@ -423,6 +436,7 @@ export default function App() {
       </main>
 
       {/* Global Consultation History Modal */}
+      {showRealtime && <RealtimeReadingModal garden={currentGarden} initialTreeId={realtimeTreeId} onClose={() => setShowRealtime(false)} />}
       {showGlobalHistoryModal && (
         <ConsultationHistoryModal onClose={() => setShowGlobalHistoryModal(false)} />
       )}
